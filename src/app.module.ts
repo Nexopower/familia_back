@@ -10,6 +10,7 @@ import { AuthService } from './auth/auth.service';
 import { AuthController } from './auth/auth.controller';
 import { TokenService } from './token/token.service';
 import { TokenCleanupService } from './token/token-cleanup.service';
+import { EncryptionService } from './encryption/encryption.service';
 import { Tokenpass } from './const/const';
 
 @Module({
@@ -36,6 +37,7 @@ import { Tokenpass } from './const/const';
     AuthService,
     TokenService,
     TokenCleanupService,
+    EncryptionService,
   ],
 })
 export class AppModule { }

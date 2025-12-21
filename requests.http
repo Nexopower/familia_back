@@ -1,0 +1,34 @@
+# ENDPOINTS DE AUTENTICACIÓN
+# Archivo .http para probar el backend con REST Client (VS Code)
+
+### Variables
+@baseUrl = http://localhost:8000
+@token = 
+
+### 0. Generar Hash de Contraseña (útil para crear usuarios)
+POST {{baseUrl}}/auth/hash-password
+Content-Type: application/json
+
+{
+  "password": "123456"
+}
+
+### 1. Login
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "codusr": "admin",
+  "password": "123456"
+}
+
+### 2. Validar Token (después de login, copiar accessToken arriba en @token)
+GET {{baseUrl}}/auth/validate
+Authorization: Bearer {{token}}
+
+### 3. Logout
+POST {{baseUrl}}/auth/logout
+Authorization: Bearer {{token}}
+
+### 4. Health Check - Verificar conexión a BD
+GET {{baseUrl}}/health
