@@ -1,0 +1,240 @@
+{
+  "version": 1,
+  "generatedAt": "2026-03-05T00:55:15.451Z",
+  "modules": [
+    {
+      "key": "CONTABILIDAD",
+      "nombre": "Contabilidad"
+    },
+    {
+      "key": "CONFIGURACIONES",
+      "nombre": "Configuraciones"
+    },
+    {
+      "key": "DASHBOARD",
+      "nombre": "Dashboard"
+    },
+    {
+      "key": "FACTURAS",
+      "nombre": "Facturas"
+    },
+    {
+      "key": "INVENTARIO",
+      "nombre": "Inventario"
+    },
+    {
+      "key": "PRODUCTOS",
+      "nombre": "Productos"
+    },
+    {
+      "key": "RESERVAS",
+      "nombre": "Reservas"
+    },
+    {
+      "key": "USUARIOS",
+      "nombre": "Usuarios"
+    }
+  ],
+  "modulePermissions": {
+    "CONTABILIDAD": [
+      "CONTABILIDAD.VER",
+      "CONTABILIDAD.INGRESO.CREAR",
+      "CONTABILIDAD.EGRESO.CREAR"
+    ],
+    "CONFIGURACIONES": [
+      "CONFIGURACIONES.VER",
+      "CONFIGURACIONES.EDITAR"
+    ],
+    "DASHBOARD": [
+      "DASHBOARD.VER"
+    ],
+    "FACTURAS": [
+      "FACTURAS.VER",
+      "FACTURAS.CREAR",
+      "FACTURAS.CERRAR"
+    ],
+    "INVENTARIO": [
+      "INVENTARIO.VER",
+      "INVENTARIO.MOVIMIENTO.VER",
+      "INVENTARIO.MOVIMIENTO.CREAR"
+    ],
+    "PRODUCTOS": [
+      "PRODUCTOS.VER",
+      "PRODUCTOS.CREAR",
+      "PRODUCTOS.EDITAR",
+      "PRODUCTOS.ELIMINAR",
+      "PRODUCTOS.CATEGORIAS.GESTIONAR",
+      "PRODUCTOS.MARCAS.GESTIONAR"
+    ],
+    "RESERVAS": [
+      "RESERVAS.VER",
+      "RESERVAS.CREAR",
+      "RESERVAS.REPROGRAMAR"
+    ],
+    "USUARIOS": [
+      "USUARIOS.VER",
+      "USUARIOS.CREAR",
+      "USUARIOS.ROL.CAMBIAR",
+      "USUARIOS.ESTADO.CAMBIAR",
+      "USUARIOS.ROLES_CREABLES.CONFIGURAR"
+    ]
+  },
+  "permissions": [
+    {
+      "clave": "CONTABILIDAD.EGRESO.CREAR",
+      "nombre": "Registrar egresos",
+      "detalle": null,
+      "moduloKey": "CONTABILIDAD"
+    },
+    {
+      "clave": "CONTABILIDAD.INGRESO.CREAR",
+      "nombre": "Registrar ingresos",
+      "detalle": null,
+      "moduloKey": "CONTABILIDAD"
+    },
+    {
+      "clave": "CONTABILIDAD.VER",
+      "nombre": "Ver contabilidad",
+      "detalle": null,
+      "moduloKey": "CONTABILIDAD"
+    },
+    {
+      "clave": "CONFIGURACIONES.EDITAR",
+      "nombre": "Editar configuraciones",
+      "detalle": null,
+      "moduloKey": "CONFIGURACIONES"
+    },
+    {
+      "clave": "CONFIGURACIONES.VER",
+      "nombre": "Ver configuraciones",
+      "detalle": null,
+      "moduloKey": "CONFIGURACIONES"
+    },
+    {
+      "clave": "DASHBOARD.VER",
+      "nombre": "Ver dashboard",
+      "detalle": null,
+      "moduloKey": "DASHBOARD"
+    },
+    {
+      "clave": "FACTURAS.CERRAR",
+      "nombre": "Cerrar facturas",
+      "detalle": null,
+      "moduloKey": "FACTURAS"
+    },
+    {
+      "clave": "FACTURAS.CREAR",
+      "nombre": "Crear facturas",
+      "detalle": null,
+      "moduloKey": "FACTURAS"
+    },
+    {
+      "clave": "FACTURAS.VER",
+      "nombre": "Ver facturas",
+      "detalle": null,
+      "moduloKey": "FACTURAS"
+    },
+    {
+      "clave": "INVENTARIO.MOVIMIENTO.CREAR",
+      "nombre": "Registrar movimientos de inventario",
+      "detalle": null,
+      "moduloKey": "INVENTARIO"
+    },
+    {
+      "clave": "INVENTARIO.MOVIMIENTO.VER",
+      "nombre": "Ver movimientos de inventario",
+      "detalle": null,
+      "moduloKey": "INVENTARIO"
+    },
+    {
+      "clave": "INVENTARIO.VER",
+      "nombre": "Ver inventario",
+      "detalle": null,
+      "moduloKey": "INVENTARIO"
+    },
+    {
+      "clave": "PRODUCTOS.CREAR",
+      "nombre": "Crear productos",
+      "detalle": null,
+      "moduloKey": "PRODUCTOS"
+    },
+    {
+      "clave": "PRODUCTOS.VER",
+      "nombre": "Ver productos",
+      "detalle": null,
+      "moduloKey": "PRODUCTOS"
+    },
+    {
+      "clave": "PRODUCTOS.EDITAR",
+      "nombre": "Editar productos",
+      "detalle": null,
+      "moduloKey": "PRODUCTOS"
+    },
+    {
+      "clave": "PRODUCTOS.ELIMINAR",
+      "nombre": "Eliminar/Inactivar productos",
+      "detalle": null,
+      "moduloKey": "PRODUCTOS"
+    },
+    {
+      "clave": "PRODUCTOS.CATEGORIAS.GESTIONAR",
+      "nombre": "Gestionar categorías",
+      "detalle": null,
+      "moduloKey": "PRODUCTOS"
+    },
+    {
+      "clave": "PRODUCTOS.MARCAS.GESTIONAR",
+      "nombre": "Gestionar marcas",
+      "detalle": null,
+      "moduloKey": "PRODUCTOS"
+    },
+    {
+      "clave": "RESERVAS.CREAR",
+      "nombre": "Crear reservas",
+      "detalle": null,
+      "moduloKey": "RESERVAS"
+    },
+    {
+      "clave": "RESERVAS.REPROGRAMAR",
+      "nombre": "Reprogramar reservas",
+      "detalle": null,
+      "moduloKey": "RESERVAS"
+    },
+    {
+      "clave": "RESERVAS.VER",
+      "nombre": "Ver reservas",
+      "detalle": null,
+      "moduloKey": "RESERVAS"
+    },
+    {
+      "clave": "USUARIOS.CREAR",
+      "nombre": "Crear usuarios",
+      "detalle": null,
+      "moduloKey": "USUARIOS"
+    },
+    {
+      "clave": "USUARIOS.ESTADO.CAMBIAR",
+      "nombre": "Cambiar estado de usuarios",
+      "detalle": null,
+      "moduloKey": "USUARIOS"
+    },
+    {
+      "clave": "USUARIOS.ROL.CAMBIAR",
+      "nombre": "Cambiar rol de usuarios",
+      "detalle": null,
+      "moduloKey": "USUARIOS"
+    },
+    {
+      "clave": "USUARIOS.ROLES_CREABLES.CONFIGURAR",
+      "nombre": "Configurar roles creables",
+      "detalle": null,
+      "moduloKey": "USUARIOS"
+    },
+    {
+      "clave": "USUARIOS.VER",
+      "nombre": "Ver usuarios",
+      "detalle": null,
+      "moduloKey": "USUARIOS"
+    }
+  ]
+}

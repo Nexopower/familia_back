@@ -16,14 +16,14 @@ export class AppService {
         status: 'ok',
         database: 'connected',
         timestamp: new Date().toISOString(),
-        result: result
+        result: result,
       };
     } catch (error) {
       return {
         status: 'error',
         database: 'disconnected',
         message: error.message,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       };
     }
   }

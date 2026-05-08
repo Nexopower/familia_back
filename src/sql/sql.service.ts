@@ -29,7 +29,7 @@ export class SqlService {
       const request = pool.request();
 
       if (params) {
-        Object.keys(params).forEach(key => {
+        Object.keys(params).forEach((key) => {
           request.input(key, params[key]);
         });
       }
@@ -76,7 +76,7 @@ export class SqlService {
       const request = new sql.Request(this.transaction);
 
       if (params) {
-        Object.keys(params).forEach(key => {
+        Object.keys(params).forEach((key) => {
           request.input(key, params[key]);
         });
       }
@@ -123,7 +123,7 @@ export class SqlService {
     }
   }
   async GETDATE(): Promise<Date> {
-    const date = await this.executeQuery("SELECT GETDATE() AS DATE")
+    const date = await this.executeQuery('SELECT GETDATE() AS DATE');
     return date[0].DATE;
   }
 }

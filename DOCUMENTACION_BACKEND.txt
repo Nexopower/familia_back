@@ -1,0 +1,697 @@
+DOCUMENTACIÓN BACKEND - familia_back (NestJS + SQL Server)
+=====================================================
+
+1) Resumen
+---------
+Este proyecto es una API REST construida con NestJS (TypeScript) que se conecta a SQL Server mediante el paquete `mssql`.
+Incluye autenticación con JWT (access + refresh), soporte multi-negocio (multi-tenant) y módulos funcionales:
+- Auth (login, logout, switch de negocio, validate token, hash de password)
+- Dashboard (vista general agregada por negocio)
+- Productos
+- Inventario
+- Facturas
+- Reservas
+- Contabilidad
+
+2) Requisitos
+-------------
+- Node.js (recomendado: LTS)
+- SQL Server (instancia accesible desde donde corre el backend)
+
+3) Configuración (.env)
+----------------------
+Crear un archivo `.env` en la raíz con:
+
+PORT=3000
+
+DATABASE_USERNAME=...
+DATABASE_PASSWORD=...
+DATABASE_HOST=...
+DATABASE_PORT=1433
+DATABASE_NAME=...
+
+Notas:
+- La configuración se carga con `@nestjs/config` desde `src/sql/config/configuration.ts`.
+- En la configuración actual, `encrypt` está en false y `trustServerCertificate` en true.
+
+4) Cómo ejecutar
+---------------
+Comandos útiles (ver `package.json`):
+- Desarrollo (watch): npm run start:dev
+- Build: npm run build
+- Producción: npm run start:prod
+
+La app levanta en el puerto indicado por `PORT` (o 3000 si no existe).
+
+5) Conexión a base de datos
+---------------------------
+Servicio: `src/sql/sql.service.ts`
+- executeQuery(query): ejecuta un query simple y devuelve recordset.
+- executeQueryParams(query, params): ejecuta query con parámetros.
+- beginTransaction/queryTransaction/commitTransaction/rollbackTransaction: helpers de transacción.
+
+6) Autenticación y seguridad
+----------------------------
+6.1 JWT
+- Se usan access tokens (15 min) y refresh tokens (7 días o 30 días según parámetro interno).
+- El JWT se firma con un secreto definido en `src/const/const.ts` (Tokenpass.secret).
+  IMPORTANTE: actualmente el secreto está hardcodeado.
+
+Claims del JWT (payload):
+- sub: string (codusr)
+- codrol: number|string|null (rol principal o rol por negocio)
+- codneg: number|null (negocio seleccionado; puede ser null en sesión "vista general")
+- audit: number|null (id de auditoría; en este proyecto se toma desde codper)
+
+Guard:
+- `src/auth/guards/jwt-auth.guard.ts`:
+  - Lee Authorization: Bearer <token>
+  - Valida token (firma + blacklist) con TokenService.ValidatedToken
+  - Adjunta payload en request.user
+
+6.2 Refresh tokens y revocación
+- Refresh token se guarda en tabla `refresh_tokens`.
+- Revocación de access token: se agrega el token a `token_blacklist` con fecha de expiración.
+- Limpieza automática: `TokenCleanupService` corre cron 2 veces al día (00:00 y 12:00) y borra tokens expirados.
+
+Nota: En el código existe `TokenService.RefreshAccessToken(refreshToken)` pero NO hay endpoint expuesto actualmente para refrescar el access token.
+
+6.3 Multi-negocio (multi-tenant)
+Reglas clave:
+- El usuario se autentica principalmente por `nombre_usr` + `passwo_usr` (también soporta codusr por compatibilidad).
+- La pertenencia a negocios se define por:
+  - dbo.usuario_negocio (asignación de usuarios a negocios)
+  - dbo.negocio_dueno (dueños/codueños)
+- Validación de acceso por negocio:
+  - `AuthService.assertCanAccessNegocio(payload, codneg)`
+  - SUPERADMIN tiene bypass.
+
+Tipos de login soportados (comportamiento implementado):
+A) Admin global (SUPERADMIN o usuario codusr='admin')
+- Puede ver todos los negocios.
+- Puede iniciar sesión sin enviar codneg.
+- Puede cambiar de negocio con /auth/switch-negocio.
+
+B) Dueños (usuario.esdueno_usr = 1)
+- Puede iniciar sesión sin enviar codneg (sesión "vista general").
+- Puede cambiar de negocio con /auth/switch-negocio.
+
+C) Trabajadores
+- Si loginmulti_usr = 1:
+  - Puede iniciar sesión sin codneg (vista general).
+  - Puede cambiar de negocio con /auth/switch-negocio.
+- Si loginmulti_usr = 0:
+  - DEBE enviar codneg en login.
+  - NO puede cambiar de negocio sin volver a iniciar sesión (switch-negocio devuelve error).
+
+7) Endpoints
+------------
+Convenciones:
+- Base URL típica: http://localhost:3000
+- Endpoints protegidos requieren header:
+  Authorization: Bearer <accessToken>
+
+7.1 AppController
+- GET /
+  - Respuesta: "Hello World!"
+
+- GET /health
+  - Verifica conexión a SQL Server (SELECT 1)
+  - Respuesta OK ejemplo:
+    {
+      "status": "ok",
+      "database": "connected",
+      "timestamp": "...",
+      "result": [{"test": 1}]
+    }
+
+7.2 AuthController (prefijo /auth)
+- POST /auth/login
+  Body:
+    {
+      "codusr": "...",        // opcional
+      "nombre": "...",        // opcional
+      "password": "...",      // requerido
+      "codneg": 1              // opcional (según tipo de usuario)
+    }
+
+  Reglas:
+  - Debes enviar `codusr` o `nombre`.
+  - Para trabajadores sin loginmulti y no dueños: codneg es obligatorio.
+
+  Respuesta (ejemplo):
+    {
+      "accessToken": "...",
+      "refreshToken": "...",
+      "user": {
+        "codusr": "...",
+        "codper": 123,
+        "codrol": 2,
+        "codneg": 1,           // puede ser null si sesión general
+        "nombre": "...",
+        "esdueno": true,
+        "loginmulti": true,
+        "isAdmin": false
+      },
+      "negocios": [
+        {"codneg": 1, "nombre": "...", "esdueno": true, "esprincipal": true}
+      ]
+    }
+
+- POST /auth/switch-negocio (PROTEGIDO)
+  Body:
+    { "codneg": 1 }
+
+  Reglas:
+  - Solo SUPERADMIN, dueños o usuarios con loginmulti.
+  - Verifica pertenencia al negocio.
+
+  Respuesta:
+    {
+      "accessToken": "...",
+      "expiresIn": 900,
+      "codneg": 1,
+      "codrol": 2
+    }
+
+- GET /auth/validate
+  - Valida el token actual (lee Authorization header).
+  - Respuesta: payload decodificado.
+
+- POST /auth/logout
+  - Revoca el access token actual agregándolo a blacklist.
+  - Respuesta:
+    {"SUCCESS": true, "CODE": "TOKEN_REVOKED"}
+
+- POST /auth/hash-password
+  - Genera un hash determinístico para una contraseña.
+  Body:
+    { "password": "texto" }
+  Respuesta:
+    { "password": "texto", "hash": "..." }
+
+Notas de hashing:
+- Se usa AES-256-CTR con IV fijo y clave derivada (scrypt) en `src/class/encryption.class.ts`.
+- El resultado se trunca a 100 caracteres hex.
+
+7.3 DashboardController (prefijo /dashboard)
+- GET /dashboard/overview (PROTEGIDO)
+  - Vista general agregada por negocio.
+  - Solo: SUPERADMIN, dueños, loginmulti.
+
+  Respuesta:
+    {
+      "generatedAt": "...",
+      "negocios": [
+        {
+          "codneg": 1,
+          "nombre": "...",
+          "productos_activos": 10,
+          "stock_total": 50,
+          "facturas_30d": 3,
+          "facturas_abiertas": 1,
+          "reservas_7d": 2,
+          "ingresos_30d": 1000,
+          "egresos_30d": 200
+        }
+      ]
+    }
+
+7.4 ProductosController (prefijo /productos) (PROTEGIDO)
+- GET /productos?codneg=1
+  - Lista productos del negocio.
+
+- POST /productos
+  Body:
+    {
+      "codneg": 1,
+      "nombre": "Producto",
+      "codigo": "SKU-1",     // opcional
+      "codcat": 1,            // opcional
+      "codmar": 1             // opcional
+    }
+  - Inserta y devuelve el producto creado.
+
+Seguridad:
+- Ambos endpoints validan `assertCanAccessNegocio`.
+
+7.5 InventarioController (prefijo /inventario) (PROTEGIDO)
+- GET /inventario/stock?codneg=1&codprd=10
+  - Devuelve stock actual.
+  - Implementación: dbo.fn_stock_actual(@codneg, @codprd)
+
+- POST /inventario/movimientos
+  Body:
+    {
+      "codneg": 1,
+      "codprd": 10,
+      "tipo": "...",        // tipo de movimiento (según SP)
+      "cantidad": 5,
+      "detalle": "..."      // opcional
+    }
+
+  Implementación:
+  - Ejecuta dbo.sp_inventario_asegurar
+  - Ejecuta dbo.sp_inventario_movimiento_registrar (devuelve codmin)
+
+Seguridad:
+- Ambos endpoints validan `assertCanAccessNegocio`.
+
+7.6 FacturasController (prefijo /facturas) (PROTEGIDO)
+- POST /facturas
+  Body:
+    {
+      "codneg": 1,           // opcional; si no viene, toma req.user.codneg
+      "tipo": "...",        // requerido
+      "codcli": 1,           // opcional
+      "codpro": 1            // opcional
+    }
+
+  Implementación:
+  - dbo.sp_factura_crear => devuelve codfac
+  - Luego consulta factura + detalle
+
+- POST /facturas/:codfac/detalle
+  Body:
+    {
+      "codprd": 10,
+      "cantidad": 2,
+      "preuni": 100
+    }
+
+  Implementación:
+  - dbo.sp_factura_detalle_agregar => devuelve codfdt
+
+- POST /facturas/:codfac/cerrar
+  Implementación:
+  - dbo.sp_factura_cerrar
+
+- GET /facturas/:codfac?codneg=1
+  - Obtiene factura y detalle.
+  - Si codneg está presente (o se deduce del token), valida acceso al negocio.
+
+7.7 ReservasController (prefijo /reservas) (PROTEGIDO)
+- POST /reservas
+  Body:
+    {
+      "codneg": 1,          // opcional; si no viene, toma req.user.codneg
+      "codcli": 1,
+      "fecini": "2026-01-01T10:00:00.000Z",
+      "fecfin": "2026-01-01T11:00:00.000Z",
+      "detalle": "..."     // opcional
+    }
+
+  Implementación:
+  - dbo.sp_reserva_crear => devuelve codres
+
+- POST /reservas/:codres/reprogramar
+  Body:
+    {
+      "fecini": "...",
+      "fecfin": "..."
+    }
+
+  Implementación:
+  - dbo.sp_reserva_reprogramar
+
+- GET /reservas?codneg=1&desde=2026-01-01T00:00:00.000Z&hasta=2026-01-31T23:59:59.000Z
+  - Lista reservas por rango.
+
+- GET /reservas/:codres?codneg=1
+  - Obtiene una reserva.
+  - Si codneg está presente (o se deduce del token), valida acceso al negocio.
+
+7.8 ContabilidadController (prefijo /contabilidad) (PROTEGIDO)
+- GET /contabilidad/cuentas?codneg=1
+  - Lista cuentas contables activas.
+  - codneg es opcional; si viene/deduce, valida acceso.
+
+- POST /contabilidad/ingresos
+  Body:
+    {
+      "codneg": 1,
+      "codcta": 1,
+      "monto": 1000,
+      "descri": "...",     // opcional
+      "refdoc": "..."      // opcional
+    }
+
+  Implementación:
+  - dbo.sp_ingreso_registrar => devuelve coding
+
+- POST /contabilidad/egresos
+  Body:
+    {
+      "codneg": 1,
+      "codcta": 1,
+      "monto": 200,
+      "descri": "...",     // opcional
+      "refdoc": "..."      // opcional
+    }
+
+  Implementación:
+  - dbo.sp_egreso_registrar => devuelve codegr
+
+7.9 RBAC (módulos y permisos) (prefijo /rbac) (PROTEGIDO)
+- GET /rbac/catalog
+  - Devuelve el catálogo de módulos y el mapeo módulo->permisos que usa el frontend.
+
+- GET /rbac/visible-modules?codneg=1
+  - Devuelve módulos visibles según:
+    - negocio seleccionado (codneg),
+    - pertenencia al negocio (AuthService.assertCanAccessNegocio),
+    - permisos del usuario (RBAC en BD vía fn_authz_tiene_permiso).
+  - Reglas:
+    - Si no hay negocio seleccionado (codneg null en token y no se envía codneg):
+      - SUPERADMIN: devuelve todos los módulos visibles.
+      - Otros: devuelve lista vacía (para que en dashboard general no se rendericen módulos).
+    - Con negocio seleccionado:
+      - SUPERADMIN: visible=true para todos los módulos.
+      - Otros: visible=true si tiene al menos 1 permiso asociado al módulo.
+
+  Nota:
+  - El mapa módulo->permisos se define en `src/rbac/rbac.permisos.ts`.
+  - La autorización por endpoint se aplica con `PermisoGuard` + `@RequirePermiso('CLAVE.PERMISO')`.
+
+--- Administración RBAC (solo SUPERADMIN) ---
+
+- POST /rbac/permisos/upsert
+  - Crea/actualiza un permiso en `dbo.permisos`.
+  Body:
+    { "clave": "PRODUCTOS.VER", "nombre": "Ver productos", "detalle": "..." }
+  - Implementación: dbo.sp_permiso_upsert
+
+- POST /rbac/roles/permisos/set
+  - Asigna o inhabilita un permiso a un rol.
+  Body:
+    { "codrol": 2, "clavePermiso": "PRODUCTOS.VER", "estado": "A" }
+  - Implementación: dbo.sp_rol_permiso_set
+
+- POST /rbac/usuarios/rol-global/set
+  - Asigna o inhabilita un rol global a un usuario.
+  Body:
+    { "codusr": "U0000001", "codrol": 1, "estado": "A" }
+  - Implementación: dbo.sp_usuario_rol_global_set
+
+---
+
+Módulos, componentes, permisos y visualización (RBAC)
+----------------------------------------------------
+
+IMPORTANTE (estado actual del backend):
+- El backend hoy expone un catálogo y visibilidad de módulos basado en las claves del archivo `src/rbac/rbac.permisos.ts`.
+- La estructura y nombres de permisos puede extenderse libremente en BD (tabla `dbo.permisos`) usando claves string tipo `MODULO.ACCION`.
+- En el catálogo actual están definidos: DASHBOARD, PRODUCTOS, INVENTARIO, FACTURAS, RESERVAS, CONTABILIDAD y USUARIOS.
+- Nota de naming: en este backend se usan claves `FACTURAS.*` (no `FACTURACION.*`) y `CONTABILIDAD.INGRESO.CREAR`/`CONTABILIDAD.EGRESO.CREAR` (singular).
+
+La sección siguiente describe el enfoque RBAC y un mapa recomendado (útil para front/back).
+
+## Módulos, componentes, permisos y visualización (RBAC)
+
+### 1) Conceptos (RBAC)
+El control de acceso se basa en **permisos** (tabla `dbo.permisos`) asignados a:
+- **Roles** (tabla `dbo.roles`) vía `dbo.rol_permiso`
+- **Roles globales por usuario** vía `dbo.usuario_rol_global`
+- **Permisos globales directos por usuario** vía `dbo.usuario_permiso_global`
+- **Roles por negocio** vía `dbo.usuario_negocio` (usa `codrol_uneg`)
+
+La función central de autorización es:
+- `dbo.fn_authz_tiene_permiso(@codusr, @codneg, @clave_permiso)`
+  Devuelve `1` si el usuario tiene el permiso:
+  1) por permiso global directo (`usuario_permiso_global`)
+  2) por rol global (`usuario_rol_global` + `rol_permiso`)
+  3) por rol dentro del negocio (`usuario_negocio` + `rol_permiso`)
+
+Soporta comodín:
+- Permiso `*` (clave `*`) = acceso total.
+
+---
+
+### 2) Estructura de permisos recomendada
+Convención de clave:
+- `MODULO.ACCION` (simple) o `MODULO.SUBMODULO.ACCION` (granular)
+
+Ejemplos:
+- `NEGOCIO.VER`
+- `INVENTARIO.MOVIMIENTO.CREAR`
+- `FACTURACION.FACTURA.CERRAR`
+- `RESERVAS.CREAR`
+- `SEGURIDAD.RBAC.ADMIN`
+
+---
+
+### 3) Mapa de módulos y componentes (UI) + permisos
+
+> Nota: Los nombres son sugeridos; lo importante es que existan como `permisos.clave_prm` y que el front-/back verifiquen con `fn_authz_tiene_permiso`.
+
+#### 3.1) Módulo: Negocios
+**Componentes / pantallas**
+- Listado de negocios asociados
+- Gestión de dueños/codueños (si aplica)
+- Gestión de usuarios por negocio (`usuario_negocio`)
+
+**Permisos**
+- `NEGOCIO.LISTAR` - ver negocios disponibles
+- `NEGOCIO.VER` - ver detalle/config
+- `NEGOCIO.USUARIOS.GESTIONAR` - asignar usuarios/roles por negocio
+- `NEGOCIO.DUENOS.GESTIONAR` - gestionar `negocio_dueno`
+
+**Visualización**
+- Mostrar módulo si `fn_authz_tiene_permiso(codusr, NULL, 'NEGOCIO.LISTAR')=1`
+  o si tiene algún permiso `NEGOCIO.*` o `*`.
+
+---
+
+#### 3.2) Módulo: Productos (Catálogo)
+**Componentes**
+- Categorías (`categorias`)
+- Marcas (`marcas`)
+- Productos (`producto`, `producto_det`)
+- Unidades de medida (avanzado) (`unidades_medida`, `producto_um`, `conversion_um`)
+- Recetas/BOM (avanzado) (`producto_composicion`)
+
+**Permisos**
+- `PRODUCTOS.VER`
+- `PRODUCTOS.CREAR`
+- `PRODUCTOS.EDITAR`
+- `PRODUCTOS.ELIMINAR`
+- `PRODUCTOS.UNIDADES.GESTIONAR`
+- `PRODUCTOS.CONVERSIONES.GESTIONAR`
+- `PRODUCTOS.RECETAS.GESTIONAR` (usa `sp_producto_composicion_set`)
+
+**Visualización**
+- Menú “Productos” si `PRODUCTOS.VER`.
+- Submenús “Unidades/Conversiones/Recetas” si sus permisos específicos.
+
+---
+
+#### 3.3) Módulo: Inventario
+**Componentes**
+- Existencias por producto (`inventario`)
+- Movimientos (`movimientos_inventario`)
+- Ajustes/entradas/salidas (usa `sp_inventario_movimiento_registrar`)
+- Transformaciones (avanzado) (`transformaciones`, `transformaciones_det`, `sp_transformacion_registrar`)
+- Venta con consumo de receta (avanzado) (`sp_venta_producto`)
+
+**Permisos**
+- `INVENTARIO.VER`
+- `INVENTARIO.MOVIMIENTO.VER`
+- `INVENTARIO.MOVIMIENTO.CREAR` (entradas/salidas/ajustes)
+- `INVENTARIO.TRANSFORMACION.CREAR`
+- `INVENTARIO.VENTA.CREAR` (si se expone “venta rápida” con BOM)
+
+**Visualización**
+- “Inventario” si `INVENTARIO.VER`.
+- Botón “Crear movimiento” si `INVENTARIO.MOVIMIENTO.CREAR`.
+- “Transformaciones” si `INVENTARIO.TRANSFORMACION.CREAR`.
+
+---
+
+#### 3.4) Módulo: Clientes y Proveedores
+**Componentes**
+- Clientes (`clientes` + `personas`)
+- Proveedores (`proveedores` + `personas`)
+
+**Permisos**
+- `TERCEROS.CLIENTES.VER`
+- `TERCEROS.CLIENTES.GESTIONAR`
+- `TERCEROS.PROVEEDORES.VER`
+- `TERCEROS.PROVEEDORES.GESTIONAR`
+
+**Visualización**
+- Mostrar secciones según permiso de ver (clientes/proveedores).
+
+---
+
+#### 3.5) Módulo: Facturación
+**Componentes**
+- Facturas (cabecera) (`facturas`, `sp_factura_crear`)
+- Detalle (`factura_detalle`, `sp_factura_detalle_agregar`)
+- Cierre (`sp_factura_cerrar`) - impacta inventario según tipo (venta/compra)
+
+**Permisos**
+- `FACTURACION.VER`
+- `FACTURACION.FACTURA.CREAR`
+- `FACTURACION.FACTURA.EDITAR` (mientras esté `estado=abierta`)
+- `FACTURACION.FACTURA.CERRAR`
+- `FACTURACION.DETALLE.AGREGAR`
+- `FACTURACION.DETALLE.QUITAR` (si se implementa)
+- `FACTURACION.COMPRA.CREAR`
+- `FACTURACION.VENTA.CREAR`
+
+**Visualización**
+- Mostrar módulo si `FACTURACION.VER`.
+- Acciones (crear/cerrar) según permisos.
+- Para compras/ventas, condicionar según `tipo_fac`.
+
+---
+
+#### 3.6) Módulo: Reservas / Calendario
+**Componentes**
+- Reservas (`reservas`, `sp_reserva_crear`, `sp_reserva_reprogramar`)
+- Calendario (`calendario`)
+
+**Permisos**
+- `RESERVAS.VER`
+- `RESERVAS.CREAR`
+- `RESERVAS.REPROGRAMAR`
+- `RESERVAS.CANCELAR` (si se implementa estado)
+- `CALENDARIO.VER`
+- `CALENDARIO.GESTIONAR`
+
+**Visualización**
+- Mostrar “Reservas” si `RESERVAS.VER`.
+- Botones de crear/reprogramar según permisos.
+
+---
+
+#### 3.7) Módulo: Contabilidad (simple)
+**Componentes**
+- Cuentas contables (`cuentas_contables`)
+- Ingresos (`ingresos`, `sp_ingreso_registrar`)
+- Egresos (`egresos`, `sp_egreso_registrar`)
+
+**Permisos**
+- `CONTABILIDAD.VER`
+- `CONTABILIDAD.CUENTAS.GESTIONAR`
+- `CONTABILIDAD.INGRESOS.CREAR`
+- `CONTABILIDAD.EGRESOS.CREAR`
+
+**Visualización**
+- Mostrar módulo si `CONTABILIDAD.VER`.
+- Acciones según permisos específicos.
+
+---
+
+#### 3.8) Módulo: Seguridad (Tokens + RBAC)
+**Componentes**
+- Refresh tokens (`refresh_tokens`)
+- Blacklist (`token_blacklist`)
+- Gestión de permisos (`permisos`)
+- Asignación rol->permiso (`rol_permiso`)
+- Roles globales (`usuario_rol_global`)
+- Permisos globales directos (`usuario_permiso_global`)
+
+**Permisos**
+- `SEGURIDAD.TOKENS.VER`
+- `SEGURIDAD.TOKENS.REVOCAR` (si se implementa revocación)
+- `SEGURIDAD.RBAC.VER`
+- `SEGURIDAD.RBAC.ADMIN` (crear permisos, asignar roles/permisos)
+
+**Visualización**
+- Mostrar administración de RBAC solo si `SEGURIDAD.RBAC.ADMIN` o `*`.
+
+---
+
+### 4) Reglas de visualización (frontend)
+Para cada módulo/feature:
+1) Determinar `codusr` (usuario autenticado)
+2) Determinar `codneg` seleccionado (si la app es multi-negocio)
+3) Consultar permisos (idealmente desde API):
+   - `GET /me/permissions?codneg=...` o equivalente
+4) UI:
+   - **Ocultar menú** si no tiene permiso *.VER del módulo
+   - **Deshabilitar/ocultar acciones** según permisos de acción (CREAR/EDITAR/CERRAR/etc.)
+
+Regla general:
+- Si `fn_authz_tiene_permiso(codusr, codneg, '*')=1`, habilitar todo.
+
+---
+
+### 5) Semillas y SUPERADMIN
+El script crea:
+- Usuario `admin`
+- Rol `SUPERADMIN`
+- Permiso comodín `*`
+- Asignación global `admin` -> `SUPERADMIN`
+
+Esto permite que `admin` vea y opere todos los módulos.
+
+7.10 Usuarios por negocio (prefijo /negocios/:codneg/usuarios) (PROTEGIDO)
+- GET /negocios/:codneg/usuarios/descendientes
+  - Lista descendientes del usuario autenticado dentro del negocio.
+  - Requiere permiso: USUARIOS.VER
+  - Implementación:
+    - Si existe SP dbo.sp_usuario_descendientes_listar: lo usa.
+    - Si no existe: fallback con CTE sobre dbo.usuario.codpad_usr (filtra por usuario_negocio).
+
+- POST /negocios/:codneg/usuarios
+  - Crea usuario y lo asigna al negocio con un rol.
+  - Requiere permiso: USUARIOS.CREAR
+  - Requiere SP: dbo.sp_usuario_crear_con_rol (si no existe, devuelve error).
+  Body:
+    {
+      "codusr": "U0000002",
+      "nombre": "Juan",
+      "password": "1234",
+      "codrol": 2,
+      "codper": 123
+    }
+
+- PATCH /negocios/:codneg/usuarios/:codusr/rol
+  - Cambia el rol de un usuario dentro del negocio.
+  - Requiere permiso: USUARIOS.ROL.CAMBIAR
+  - Requiere SP: dbo.sp_usuario_negocio_rol_set
+  Body:
+    { "codrol": 3 }
+
+- PATCH /negocios/:codneg/usuarios/:codusr/estado
+  - Habilita/inhabilita un usuario dentro de un negocio (estado_uneg en usuario_negocio).
+  - Requiere permiso: USUARIOS.ESTADO.CAMBIAR
+  Body:
+    { "estado": "I" }  // A o I
+
+- PUT /negocios/:codneg/usuarios/:codusr/roles-creables
+  - Configura roles que el usuario podrá asignar a sus descendientes.
+  - Requiere permiso: USUARIOS.ROLES_CREABLES.CONFIGURAR
+  - Requiere SP: dbo.sp_usuario_negocio_rol_creable_set
+  Body:
+    {
+      "roles": [
+        {"codrol": 2, "permitido": true},
+        {"codrol": 3, "permitido": false}
+      ]
+    }
+
+8) Notas importantes / limitaciones actuales
+-------------------------------------------
+- No existe endpoint público para refrescar access token aunque el método existe en TokenService.
+- JWT secret está hardcodeado (Tokenpass.secret).
+- El hashing de password es determinístico (IV fijo); útil para compatibilidad pero NO es un esquema recomendado para contraseñas en producción.
+- Muchas validaciones y retornos dependen directamente del esquema y SPs/funciones definidas en la base de datos.
+
+9) Flujo típico de uso (frontend)
+--------------------------------
+1) Login:
+   - POST /auth/login con nombre/codusr + password.
+   - Si eres trabajador sin loginmulti: enviar también codneg.
+
+2) Si recibes `negocios` y deseas entrar a un negocio específico:
+   - POST /auth/switch-negocio con codneg.
+   - Guardar el nuevo accessToken.
+
+3) Consumir endpoints del negocio:
+   - Enviar Authorization Bearer <token>.
+   - En endpoints que piden codneg, enviarlo y el backend valida pertenencia.
+
+FIN
