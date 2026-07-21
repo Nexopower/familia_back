@@ -34,10 +34,26 @@ export class NegocioUsuariosController {
   ) {
     const codnegValue = Number(codneg);
     await this.authService.assertCanAccessNegocio(req.user, codnegValue);
-    const rows = await this.sql.executeQuery(
-      `SELECT codrol_rol AS codrol, nombre_rol AS nombre FROM dbo.roles ORDER BY nombre_rol`,
+    // Roles globales + roles propios de este negocio.
+    const rows = await this.sql.executeQueryParams(
+      `SELECT codrol_rol AS codrol, nombre_rol AS nombre, codneg_rol AS codneg
+       FROM dbo.roles
+       WHERE codneg_rol IS NULL OR codneg_rol = @codneg
+       ORDER BY CASE WHEN codneg_rol IS NULL THEN 1 ELSE 0 END, nombre_rol`,
+      { codneg: codnegValue },
     );
     return rows ?? [];
+  }
+
+  // Busca usuarios existentes que aún NO están vinculados a este negocio.
+  @Get('buscar')
+  @RequirePermiso('USUARIOS.VER')
+  async buscarAsignables(
+    @Param('codneg') codneg: string,
+    @Query('q') q: string,
+    @Request() req: RequestUser,
+  ) {
+    return await this.service.buscarAsignables(req.user, Number(codneg), q);
   }
 
   @Get('descendientes')
@@ -55,11 +71,14 @@ export class NegocioUsuariosController {
     @Param('codneg') codneg: string,
     @Body()
     body: {
-      codusr: string;
+      codusr?: string; // opcional: el backend genera el código (LLLNNNNN)
       nombre: string;
       password: string;
       codrol: number;
       codper?: number;
+      esdueno?: boolean;
+      loginmulti?: boolean;
+      codnegs?: number[]; // negocios adicionales (login multi-negocio)
     },
     @Request() req: RequestUser,
   ) {
@@ -71,14 +90,14 @@ export class NegocioUsuariosController {
   async cambiarRol(
     @Param('codneg') codneg: string,
     @Param('codusr') codusr: string,
-    @Body() body: { codrol: number },
+    @Body() body: { codrol: number | null },
     @Request() req: RequestUser,
   ) {
     return await this.service.cambiarRolNegocio(
       req.user,
       Number(codneg),
       codusr,
-      Number(body.codrol),
+      body.codrol == null ? null : Number(body.codrol),
     );
   }
 

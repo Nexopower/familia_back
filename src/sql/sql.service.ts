@@ -5,8 +5,6 @@ import { ConfigService } from '@nestjs/config';
 @Injectable()
 export class SqlService {
   private readonly config: sql.config;
-  // private rolledBack = false;
-  private transaction: sql.Transaction | null = null;
 
   constructor(private readonly configService: ConfigService) {
     const dbConfig = this.configService.get('database');
@@ -50,30 +48,38 @@ export class SqlService {
     }
   }
 
-  async beginTransaction() {
-    try {
-      const connection = await sql.connect(this.config);
-      this.transaction = connection.transaction();
-      await this.transaction.begin();
+  /**
+   * Inicia una transacción y la DEVUELVE al llamador.
+   *
+   * Importante: este service es un singleton compartido entre requests, por lo
+   * que la transacción nunca se guarda como estado de instancia (dos requests
+   * concurrentes se pisarían). El contexto vive en quien llama: pásala a
+   * queryTransaction/commitTransaction/rollbackTransaction.
+   */
+  async beginTransaction(): Promise<sql.Transaction> {
+    const connection = await sql.connect(this.config);
+    const transaction = connection.transaction();
+    await transaction.begin();
 
-      this.transaction.on('rollback', (aborted) => {
-        if (aborted) {
-          console.log('Reverse transaction:', aborted);
-        }
-      });
-      // console.log('Transaction successfully initiated');
-    } catch (error) {
-      console.error('Error initiating transaction:', error);
-    }
+    transaction.on('rollback', (aborted) => {
+      if (aborted) {
+        console.log('Reverse transaction:', aborted);
+      }
+    });
+    return transaction;
   }
 
-  async queryTransaction<T extends {}>(query: string, params?: T) {
-    if (!this.transaction) {
+  async queryTransaction<T extends {}>(
+    transaction: sql.Transaction,
+    query: string,
+    params?: T,
+  ) {
+    if (!transaction) {
       throw new Error('The transaction has not been initiated.');
     }
 
     try {
-      const request = new sql.Request(this.transaction);
+      const request = new sql.Request(transaction);
 
       if (params) {
         Object.keys(params).forEach((key) => {
@@ -85,41 +91,35 @@ export class SqlService {
       return result.recordset;
     } catch (error) {
       console.error('Error in transaction query:', error);
-      await this.rollbackTransaction();
+      await this.rollbackTransaction(transaction);
       throw new Error(`Error executing transaction query: ${error}`);
     }
   }
 
-  async commitTransaction() {
-    if (!this.transaction) {
+  async commitTransaction(transaction: sql.Transaction) {
+    if (!transaction) {
       throw new Error('No transaction to confirm.');
     }
 
     try {
-      await this.transaction.commit();
-      // console.log('Transaction successfully confirmed');
+      await transaction.commit();
     } catch (error) {
       console.error('Error confirming transaction:', error);
       throw new Error('Error confirming transaction');
-    } finally {
-      this.transaction = null;
     }
   }
 
-  async rollbackTransaction() {
-    if (!this.transaction) {
+  async rollbackTransaction(transaction: sql.Transaction) {
+    if (!transaction) {
       console.log('There is no transaction to reverse.');
       return;
     }
 
     try {
-      await this.transaction.rollback();
-      // console.log('Transaction successfully reversed');
+      await transaction.rollback();
     } catch (error) {
       console.error('Error reversing transaction:', error);
       throw new Error('Error reversing transaction');
-    } finally {
-      this.transaction = null;
     }
   }
   async GETDATE(): Promise<Date> {

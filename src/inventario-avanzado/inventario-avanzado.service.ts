@@ -1,5 +1,10 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Inject, Injectable, BadRequestException } from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
 import { SqlService } from 'src/sql/sql.service';
+
+/** TTL del catálogo de unidades (casi estático). */
+const CATALOGO_TTL_MS = 10 * 60 * 1000;
 
 /**
  * Servicio de Inventario Avanzado
@@ -7,7 +12,16 @@ import { SqlService } from 'src/sql/sql.service';
  */
 @Injectable()
 export class InventarioAvanzadoService {
-  constructor(private readonly sql: SqlService) {}
+  constructor(
+    private readonly sql: SqlService,
+    @Inject(CACHE_MANAGER) private readonly cache: Cache,
+  ) {}
+
+  /** Invalida ambas variantes de caché de unidades (esta y la de productos). */
+  private async invalidarUnidadesCache() {
+    await this.cache.del('cat:unidades');
+    await this.cache.del('cat:unidades:full');
+  }
 
   // ═══════════════════════════════════════════════════════════════════
   // UNIDADES DE MEDIDA (catálogo global)
@@ -16,6 +30,13 @@ export class InventarioAvanzadoService {
   async listarUnidadesMedida(filtros?: { tipo?: string; estado?: string }) {
     const tipo = filtros?.tipo?.trim() || null;
     const estado = filtros?.estado === 'I' ? 'I' : 'A';
+
+    // Solo se cachea la consulta más común (activas, sin filtro de tipo).
+    const cacheable = estado === 'A' && !tipo;
+    if (cacheable) {
+      const hit = await this.cache.get('cat:unidades:full');
+      if (hit) return hit;
+    }
 
     const query = `
       SELECT
@@ -30,7 +51,9 @@ export class InventarioAvanzadoService {
         AND (@tipo IS NULL OR tipo_umd = @tipo)
       ORDER BY tipo_umd, nombre_umd;
     `;
-    return await this.sql.executeQueryParams(query, { estado, tipo });
+    const rows = await this.sql.executeQueryParams(query, { estado, tipo });
+    if (cacheable) await this.cache.set('cat:unidades:full', rows, CATALOGO_TTL_MS);
+    return rows;
   }
 
   async crearUnidadMedida(dto: {
@@ -64,6 +87,7 @@ export class InventarioAvanzadoService {
       tipo,
       usercrea: dto.usercrea ?? null,
     });
+    await this.invalidarUnidadesCache();
     return rows?.[0] ?? null;
   }
 
@@ -120,6 +144,7 @@ export class InventarioAvanzadoService {
     `;
 
     const rows = await this.sql.executeQueryParams(query, params);
+    await this.invalidarUnidadesCache();
     return rows?.[0] ?? null;
   }
 
@@ -765,6 +790,228 @@ export class InventarioAvanzadoService {
   // ═══════════════════════════════════════════════════════════════════
   // VISTA CONSOLIDADA: Producto con stock, precio y unidad
   // ═══════════════════════════════════════════════════════════════════
+
+  // ═══════════════════════════════════════════════════════════════════
+  // EMPAQUE: configuración de jerarquía (caja→paquete→unidad)
+  // ═══════════════════════════════════════════════════════════════════
+
+  async getEmpaqueConfig(codneg: number, codprd: number) {
+    if (!codneg || !codprd) throw new BadRequestException('codneg y codprd son requeridos');
+    const query = `
+      SELECT
+        e.codpem_pem AS codpem,
+        e.codneg_pem AS codneg,
+        e.codprd_pem AS codprd_empaque,
+        pe.nombre_prd AS nombre_empaque,
+        e.codprd_contenido_pem AS codprd_contenido,
+        pc.nombre_prd AS nombre_contenido,
+        pc.tipo_prd AS tipo_contenido,
+        e.cantidad_pem AS cantidad,
+        e.estado_pem AS estado
+      FROM dbo.producto_empaque e
+      INNER JOIN dbo.producto pe ON pe.codprd_prd = e.codprd_pem
+      INNER JOIN dbo.producto pc ON pc.codprd_prd = e.codprd_contenido_pem
+      WHERE e.codneg_pem = @codneg AND e.codprd_pem = @codprd AND e.estado_pem = 'A';
+    `;
+    const rows = await this.sql.executeQueryParams(query, { codneg, codprd });
+    return rows?.[0] ?? null;
+  }
+
+  async setEmpaqueConfig(dto: {
+    codneg: number;
+    codprd_empaque: number;
+    codprd_contenido: number;
+    cantidad: number;
+    usercrea?: number;
+  }) {
+    const codneg = Number(dto.codneg);
+    const codprd_empaque = Number(dto.codprd_empaque);
+    const codprd_contenido = Number(dto.codprd_contenido);
+    const cantidad = Number(dto.cantidad);
+
+    if (!codneg) throw new BadRequestException('codneg es requerido');
+    if (!codprd_empaque) throw new BadRequestException('codprd_empaque es requerido');
+    if (!codprd_contenido) throw new BadRequestException('codprd_contenido es requerido');
+    if (!Number.isFinite(cantidad) || cantidad <= 0 || !Number.isInteger(cantidad)) {
+      throw new BadRequestException('cantidad debe ser un entero positivo');
+    }
+    if (codprd_empaque === codprd_contenido) {
+      throw new BadRequestException('El empaque no puede contenerse a sí mismo');
+    }
+
+    const query = `
+      MERGE dbo.producto_empaque AS t
+      USING (SELECT @codneg AS cn, @codprd_empaque AS cp) AS s
+        ON t.codneg_pem = s.cn AND t.codprd_pem = s.cp
+      WHEN MATCHED THEN
+        UPDATE SET
+          codprd_contenido_pem = @codprd_contenido,
+          cantidad_pem = @cantidad,
+          estado_pem = 'A',
+          usermod = @usercrea,
+          fechmod = GETDATE()
+      WHEN NOT MATCHED THEN
+        INSERT (codneg_pem, codprd_pem, codprd_contenido_pem, cantidad_pem, usercrea)
+        VALUES (@codneg, @codprd_empaque, @codprd_contenido, @cantidad, @usercrea);
+
+      SELECT
+        e.codpem_pem AS codpem,
+        e.codneg_pem AS codneg,
+        e.codprd_pem AS codprd_empaque,
+        pe.nombre_prd AS nombre_empaque,
+        e.codprd_contenido_pem AS codprd_contenido,
+        pc.nombre_prd AS nombre_contenido,
+        pc.tipo_prd AS tipo_contenido,
+        e.cantidad_pem AS cantidad,
+        e.estado_pem AS estado
+      FROM dbo.producto_empaque e
+      INNER JOIN dbo.producto pe ON pe.codprd_prd = e.codprd_pem
+      INNER JOIN dbo.producto pc ON pc.codprd_prd = e.codprd_contenido_pem
+      WHERE e.codneg_pem = @codneg AND e.codprd_pem = @codprd_empaque;
+    `;
+
+    const rows = await this.sql.executeQueryParams(query, {
+      codneg, codprd_empaque, codprd_contenido, cantidad,
+      usercrea: dto.usercrea ?? null,
+    });
+    return rows?.[0] ?? null;
+  }
+
+  async listarJerarquiaEmpaques(codneg: number) {
+    if (!codneg) throw new BadRequestException('codneg es requerido');
+    // Retorna todos los empaques con stock real propio y del contenido, más unidades teóricas
+    const query = `
+      SELECT
+        e.codprd_pem AS codprd_empaque,
+        pe.nombre_prd AS nombre_empaque,
+        pe.codigo_prd AS codigo_empaque,
+        ISNULL(ie.stock_inv, 0) AS stock_empaque,
+        e.cantidad_pem AS cantidad_por_contenido,
+        e.codprd_contenido_pem AS codprd_contenido,
+        pc.nombre_prd AS nombre_contenido,
+        pc.codigo_prd AS codigo_contenido,
+        pc.tipo_prd AS tipo_contenido,
+        ISNULL(ic.stock_inv, 0) AS stock_contenido,
+        -- unidades teóricas que aporta este nivel de empaque al contenido
+        ISNULL(ie.stock_inv, 0) * e.cantidad_pem AS unidades_teoricas_aportadas
+      FROM dbo.producto_empaque e
+      INNER JOIN dbo.producto pe ON pe.codprd_prd = e.codprd_pem AND pe.codneg_prd = @codneg
+      INNER JOIN dbo.producto pc ON pc.codprd_prd = e.codprd_contenido_pem
+      LEFT JOIN dbo.inventario ie ON ie.codneg_inv = @codneg AND ie.codprd_inv = e.codprd_pem
+      LEFT JOIN dbo.inventario ic ON ic.codneg_inv = @codneg AND ic.codprd_inv = e.codprd_contenido_pem
+      WHERE e.codneg_pem = @codneg AND e.estado_pem = 'A' AND pe.estado_prd = 'A'
+      ORDER BY pe.nombre_prd;
+    `;
+    return await this.sql.executeQueryParams(query, { codneg });
+  }
+
+  async propagarPreciosEmpaque(codneg: number) {
+    const codnegNum = Number(codneg);
+    if (!codnegNum) throw new BadRequestException('codneg es requerido');
+
+    const query = `
+      SELECT
+        e.codprd_contenido_pem AS codprd_contenido,
+        e.codprd_pem           AS codprd_empaque,
+        e.cantidad_pem         AS cantidad,
+        pd_emp.precio_compra_pdt AS precio_compra_empaque,
+        pd_con.precio_compra_pdt AS precio_compra_contenido
+      FROM dbo.producto_empaque e
+      INNER JOIN dbo.producto pe ON pe.codprd_prd = e.codprd_pem AND pe.codneg_prd = @codneg AND pe.estado_prd = 'A'
+      LEFT JOIN dbo.producto_det pd_emp ON pd_emp.codprd_pdt = e.codprd_pem
+      LEFT JOIN dbo.producto_det pd_con ON pd_con.codprd_pdt = e.codprd_contenido_pem
+      WHERE e.codneg_pem = @codneg AND e.estado_pem = 'A'
+        AND pd_emp.precio_compra_pdt IS NOT NULL
+        AND pd_emp.precio_compra_pdt > 0
+        AND (pd_con.precio_compra_pdt IS NULL OR pd_con.precio_compra_pdt = 0)
+        AND e.cantidad_pem > 0;
+    `;
+
+    const rows = await this.sql.executeQueryParams(query, { codneg: codnegNum });
+    let actualizados = 0;
+
+    for (const row of rows ?? []) {
+      const precioUnitario = Number(row.precio_compra_empaque) / Number(row.cantidad);
+      await this.setProductoDetalle({
+        codneg: codnegNum,
+        codprd: Number(row.codprd_contenido),
+        precio_compra: precioUnitario,
+      });
+      actualizados++;
+    }
+
+    return { actualizados };
+  }
+
+  async destaparEmpaque(dto: {
+    codneg: number;
+    codprd_empaque: number;
+    cantidad: number;
+    codusr?: string;
+    usercrea?: number;
+  }) {
+    const codneg = Number(dto.codneg);
+    const codprd_empaque = Number(dto.codprd_empaque);
+    const cantidad = Number(dto.cantidad);
+
+    if (!codneg) throw new BadRequestException('codneg es requerido');
+    if (!codprd_empaque) throw new BadRequestException('codprd_empaque es requerido');
+    if (!Number.isFinite(cantidad) || cantidad <= 0 || !Number.isInteger(cantidad)) {
+      throw new BadRequestException('cantidad debe ser un entero positivo');
+    }
+
+    const query = `
+      EXEC dbo.sp_destapar_empaque
+        @codneg = @codneg,
+        @codprd_empaque = @codprd_empaque,
+        @cantidad = @cantidad,
+        @codusr = @codusr,
+        @usercrea = @usercrea;
+    `;
+
+    await this.sql.executeQueryParams(query, {
+      codneg, codprd_empaque, cantidad,
+      codusr: dto.codusr ?? null,
+      usercrea: dto.usercrea ?? null,
+    });
+
+    return { ok: true, message: 'Empaque destapado correctamente' };
+  }
+
+  async ensamblarCompuesto(dto: {
+    codneg: number;
+    codprd_final: number;
+    cantidad: number;
+    codusr?: string;
+    usercrea?: number;
+  }) {
+    const codneg = Number(dto.codneg);
+    const codprd_final = Number(dto.codprd_final);
+    const cantidad = Number(dto.cantidad);
+
+    if (!codneg) throw new BadRequestException('codneg es requerido');
+    if (!codprd_final) throw new BadRequestException('codprd_final es requerido');
+    if (!Number.isFinite(cantidad) || cantidad <= 0 || !Number.isInteger(cantidad)) {
+      throw new BadRequestException('cantidad debe ser un entero positivo');
+    }
+
+    const query = `
+      EXEC dbo.sp_ensamblar_compuesto
+        @codneg = @codneg,
+        @codprd_final = @codprd_final,
+        @cantidad = @cantidad,
+        @codusr = @codusr,
+        @usercrea = @usercrea;
+    `;
+
+    await this.sql.executeQueryParams(query, {
+      codneg, codprd_final, cantidad,
+      codusr: dto.codusr ?? null,
+      usercrea: dto.usercrea ?? null,
+    });
+
+    return { ok: true, message: 'Producto ensamblado correctamente' };
+  }
 
   async listarProductosConDetalles(codneg: number) {
     if (!codneg) throw new BadRequestException('codneg es requerido');

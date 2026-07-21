@@ -22,7 +22,9 @@ export class InventarioService {
         ISNULL(i.codinv_inv, 0) AS codinv,
         p.nombre_prd AS nombre,
         p.codigo_prd AS codigo,
+        p.tipo_prd AS tipo_prd,
         ISNULL(i.stock_inv, 0) AS stock,
+        p.stockmin_prd AS stockmin,
         p.estado_prd AS estado
       FROM dbo.producto p
       LEFT JOIN dbo.inventario i
@@ -70,10 +72,14 @@ export class InventarioService {
         m.cantidad_min AS cantidad,
         m.fecha_min AS fecha,
         m.codusr_min AS codusr,
-        m.detalle_min AS detalle
+        m.detalle_min AS detalle,
+        um.simbolo_umd AS simbolo_umd,
+        um.nombre_umd AS nombre_umd
       FROM dbo.movimientos_inventario m
       INNER JOIN dbo.inventario i ON i.codinv_inv = m.codinv_min
       INNER JOIN dbo.producto p ON p.codprd_prd = i.codprd_inv
+      LEFT JOIN dbo.producto_um pu ON pu.codneg_pum = i.codneg_inv AND pu.codprd_pum = i.codprd_inv
+      LEFT JOIN dbo.unidades_medida um ON um.codumd_umd = pu.codumd_pum
       WHERE i.codneg_inv = @codneg
         AND (@codprd IS NULL OR i.codprd_inv = @codprd)
         AND (@desde IS NULL OR m.fecha_min >= @desde)

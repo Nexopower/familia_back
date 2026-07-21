@@ -51,7 +51,9 @@
     "FACTURAS": [
       "FACTURAS.VER",
       "FACTURAS.CREAR",
-      "FACTURAS.CERRAR"
+      "FACTURAS.CERRAR",
+      "FACTURAS.VER_OPCION_MODIFICAR_PRECIO",
+      "FACTURAS.MODIFICAR_PRECIO"
     ],
     "INVENTARIO": [
       "INVENTARIO.VER",
@@ -132,6 +134,18 @@
       "clave": "FACTURAS.VER",
       "nombre": "Ver facturas",
       "detalle": null,
+      "moduloKey": "FACTURAS"
+    },
+    {
+      "clave": "FACTURAS.VER_OPCION_MODIFICAR_PRECIO",
+      "nombre": "Ver opción de modificar precio en facturación",
+      "detalle": "Permite mostrar la acción para modificar el precio unitario en la pantalla de facturación",
+      "moduloKey": "FACTURAS"
+    },
+    {
+      "clave": "FACTURAS.MODIFICAR_PRECIO",
+      "nombre": "Modificar precio en facturación",
+      "detalle": "Permite editar el precio unitario en la pantalla de facturación con autorización si aplica",
       "moduloKey": "FACTURAS"
     },
     {

@@ -1,6 +1,7 @@
 import {
   CanActivate,
   ExecutionContext,
+  ForbiddenException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -42,8 +43,20 @@ export class PermisoGuard implements CanActivate {
     const isSuperAdmin = await this.authService.isSuperAdmin(codusr);
     if (isSuperAdmin) return true;
 
+    // Dueños: acceso total a sus negocios. En sesión sin negocio (vista
+    // general de dueños/multi-negocio) se permite pasar y cada endpoint
+    // valida su propio alcance.
+    if (codneg !== null) {
+      if (await this.authz.esDuenoDeNegocio(codusr, codneg)) return true;
+    } else {
+      const flags = await this.authService.getUserFlags(codusr);
+      if (flags?.esdueno || flags?.loginmulti) return true;
+    }
+
     const ok = await this.authz.tienePermiso(codusr, codneg, permiso);
-    if (!ok) throw new UnauthorizedException('Permiso denegado');
+    // 403 (no 401): el usuario está autenticado pero no autorizado.
+    // Un 401 haría que el frontend descarte la sesión completa.
+    if (!ok) throw new ForbiddenException('Permiso denegado');
 
     return true;
   }

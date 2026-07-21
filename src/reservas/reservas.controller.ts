@@ -3,7 +3,9 @@ import {
   Controller,
   Get,
   Param,
+  Patch,
   Post,
+  Put,
   Query,
   Request,
   UseGuards,
@@ -60,6 +62,41 @@ export class ReservasController {
       fecini: new Date(body.fecini),
       fecfin: new Date(body.fecfin),
       usercrea: req.user?.audit ?? null,
+    });
+  }
+
+  @Put(':codres')
+  @RequirePermiso('RESERVAS.REPROGRAMAR')
+  async editar(
+    @Param('codres') codres: string,
+    @Body() body: { codcli: number; fecini: string; fecfin: string; detalle?: string },
+    @Request() req: any,
+  ) {
+    const codneg = await this.service.codnegDeReserva(Number(codres));
+    await this.authService.assertCanAccessNegocio(req.user, codneg);
+    return await this.service.editar({
+      codres: Number(codres),
+      codcli: Number(body.codcli),
+      fecini: new Date(body.fecini),
+      fecfin: new Date(body.fecfin),
+      detalle: body.detalle ?? null,
+      usermod: req.user?.audit ?? null,
+    });
+  }
+
+  @Patch(':codres/estado')
+  @RequirePermiso('RESERVAS.REPROGRAMAR')
+  async cambiarEstado(
+    @Param('codres') codres: string,
+    @Body() body: { estado: string },
+    @Request() req: any,
+  ) {
+    const codneg = await this.service.codnegDeReserva(Number(codres));
+    await this.authService.assertCanAccessNegocio(req.user, codneg);
+    return await this.service.cambiarEstado({
+      codres: Number(codres),
+      estado: body.estado,
+      usermod: req.user?.audit ?? null,
     });
   }
 

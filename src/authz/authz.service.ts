@@ -95,6 +95,17 @@ export class AuthzService {
     return false;
   }
 
+  /** ¿El usuario es dueño (activo) del negocio? Los dueños tienen acceso total a sus negocios. */
+  async esDuenoDeNegocio(codusr: string, codneg: number): Promise<boolean> {
+    const rows = await this.sql.executeQueryParams(
+      `SELECT TOP 1 1 AS ok
+       FROM dbo.negocio_dueno
+       WHERE codusr_ndu = @codusr AND codneg_ndu = @codneg AND ISNULL(estado_ndu, 'A') = 'A';`,
+      { codusr, codneg },
+    );
+    return Boolean(rows?.length);
+  }
+
   async assertPermiso(
     codusr: string,
     codneg: number | null,

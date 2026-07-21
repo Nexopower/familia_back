@@ -1,9 +1,19 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable } from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
 import { SqlService } from 'src/sql/sql.service';
 
 @Injectable()
 export class ConfiguracionesService {
-  constructor(private readonly sql: SqlService) {}
+  constructor(
+    private readonly sql: SqlService,
+    @Inject(CACHE_MANAGER) private readonly cache: Cache,
+  ) {}
+
+  /** La lista de negocios del login está cacheada: invalidar al mutar negocios. */
+  private async invalidarNegociosCache() {
+    await this.cache.del('cat:negocios-login');
+  }
 
   private async hasTable(tableName: string): Promise<boolean> {
     const rows = await this.sql.executeQueryParams(
@@ -189,7 +199,7 @@ export class ConfiguracionesService {
     try {
       const hasDireccion = await this.hasNegocioColumn('direccion_neg');
       const hasStockMin = await this.hasNegocioColumn('stockmin_default_neg');
-      const hasTelefono = await this.hasNegocioColumn('telefono_neg');
+      const hasTelefono = await this.hasNegocioColumn('telneg_neg');
       const hasCodtng = await this.hasNegocioColumn('codtng_neg');
       const hasCodcfn = await this.hasNegocioColumn('codcfn_neg');
       const rows = await this.sql.executeQuery(
@@ -199,8 +209,9 @@ export class ConfiguracionesService {
           n.nombre_neg AS nombre,
           ${hasCodtng ? 'n.codtng_neg AS codtng,' : 'CAST(NULL AS int) AS codtng,'}
           ${hasCodcfn ? 'n.codcfn_neg AS codcfn,' : 'CAST(NULL AS int) AS codcfn,'}
-          ${hasTelefono ? 'n.telefono_neg AS telefono,' : 'CAST(NULL AS nvarchar(30)) AS telefono,'}
+          ${hasTelefono ? 'n.telneg_neg AS telefono,' : 'CAST(NULL AS nvarchar(30)) AS telefono,'}
           n.estado_neg AS estado,
+          n.coddir_neg AS coddir,
           ${hasDireccion ? 'n.direccion_neg AS direccion,' : 'CAST(NULL AS nvarchar(250)) AS direccion,'}
           ${hasStockMin ? 'n.stockmin_default_neg AS stock_min_default' : 'CAST(NULL AS int) AS stock_min_default'}
         FROM dbo.negocios n
@@ -218,7 +229,7 @@ export class ConfiguracionesService {
     const hasCodtng = await this.hasNegocioColumn('codtng_neg');
     const hasCodcfn = await this.hasNegocioColumn('codcfn_neg');
     const hasDireccion = await this.hasNegocioColumn('direccion_neg');
-    const hasTelefono = await this.hasNegocioColumn('telefono_neg');
+    const hasTelefono = await this.hasNegocioColumn('telneg_neg');
     const hasStockMin = await this.hasNegocioColumn('stockmin_default_neg');
 
     return {
@@ -291,7 +302,7 @@ export class ConfiguracionesService {
           u.estado_usr AS estado_usr,
           p.codper_per AS codper,
           p.nombre_per AS nombre_per,
-          p.apellido_per AS apellido_per,
+          p.apellidos_per AS apellido_per,
           p.email_per AS email_per
         FROM dbo.negocio_dueno nd
         INNER JOIN dbo.usuario u
@@ -302,7 +313,7 @@ export class ConfiguracionesService {
           AND ISNULL(nd.estado_ndu, 'A') = 'A'
         ORDER BY CASE WHEN ISNULL(nd.esprincipal_ndu, 0) = 1 THEN 0 ELSE 1 END,
                  p.nombre_per,
-                 p.apellido_per,
+                 p.apellidos_per,
                  u.nombre_usr;
         `,
         { codneg: codnegValue },
@@ -329,7 +340,7 @@ export class ConfiguracionesService {
           CAST(ISNULL(u.esdueno_usr, 0) AS bit) AS esdueno,
           p.codper_per AS codper,
           p.nombre_per AS nombre_per,
-          p.apellido_per AS apellido_per,
+          p.apellidos_per AS apellido_per,
           p.email_per AS email_per
         FROM dbo.usuario u
         LEFT JOIN dbo.personas p
@@ -340,10 +351,10 @@ export class ConfiguracionesService {
             u.codusr_usr LIKE @q
             OR u.nombre_usr LIKE @q
             OR ISNULL(p.nombre_per, '') LIKE @q
-            OR ISNULL(p.apellido_per, '') LIKE @q
+            OR ISNULL(p.apellidos_per, '') LIKE @q
             OR ISNULL(p.email_per, '') LIKE @q
           )
-        ORDER BY p.nombre_per, p.apellido_per, u.nombre_usr;
+        ORDER BY p.nombre_per, p.apellidos_per, u.nombre_usr;
         `,
         { q: `%${term}%` },
       );
@@ -534,12 +545,27 @@ export class ConfiguracionesService {
     }
   }
 
+  /** Vincula el negocio a una dirección del catálogo (coddir_neg). */
+  private async setNegocioDireccion(
+    codneg: number,
+    coddir: number | null,
+    audit: number | null,
+  ) {
+    await this.sql.executeQueryParams(
+      `UPDATE dbo.negocios
+         SET coddir_neg = @coddir, usermod = @audit, fechmod = GETDATE()
+       WHERE codneg_neg = @codneg;`,
+      { codneg, coddir, audit },
+    );
+  }
+
   async crearNegocioAdmin(dto: {
     nombre: string;
     codtng?: number | null;
     codcfn?: number | null;
     telefono?: string | null;
     direccion?: string | null;
+    coddir?: number | null;
     stock_min_default?: number | null;
     estado?: 'A' | 'I';
     audit?: number | null;
@@ -580,7 +606,7 @@ export class ConfiguracionesService {
 
     try {
       const hasDireccion = await this.hasNegocioColumn('direccion_neg');
-      const hasTelefono = await this.hasNegocioColumn('telefono_neg');
+      const hasTelefono = await this.hasNegocioColumn('telneg_neg');
       const hasCodtng = await this.hasNegocioColumn('codtng_neg');
       const hasCodcfn = await this.hasNegocioColumn('codcfn_neg');
       const hasStockMin = await this.hasNegocioColumn('stockmin_default_neg');
@@ -598,7 +624,7 @@ export class ConfiguracionesService {
         DECLARE @has_fechcrea bit = CASE WHEN COL_LENGTH('dbo.negocios', 'fechcrea') IS NULL THEN 0 ELSE 1 END;
         DECLARE @has_fechmod bit = CASE WHEN COL_LENGTH('dbo.negocios', 'fechmod') IS NULL THEN 0 ELSE 1 END;
         DECLARE @has_direccion bit = CASE WHEN COL_LENGTH('dbo.negocios', 'direccion_neg') IS NULL THEN 0 ELSE 1 END;
-        DECLARE @has_telefono bit = CASE WHEN COL_LENGTH('dbo.negocios', 'telefono_neg') IS NULL THEN 0 ELSE 1 END;
+        DECLARE @has_telefono bit = CASE WHEN COL_LENGTH('dbo.negocios', 'telneg_neg') IS NULL THEN 0 ELSE 1 END;
         DECLARE @has_codtng bit = CASE WHEN COL_LENGTH('dbo.negocios', 'codtng_neg') IS NULL THEN 0 ELSE 1 END;
         DECLARE @has_codcfn bit = CASE WHEN COL_LENGTH('dbo.negocios', 'codcfn_neg') IS NULL THEN 0 ELSE 1 END;
         DECLARE @has_stockmin bit = CASE WHEN COL_LENGTH('dbo.negocios', 'stockmin_default_neg') IS NULL THEN 0 ELSE 1 END;
@@ -627,7 +653,7 @@ export class ConfiguracionesService {
           SET @vals += N', @direccion';
         END
         IF @has_telefono = 1 BEGIN
-          SET @cols += N', telefono_neg';
+          SET @cols += N', telneg_neg';
           SET @vals += N', @telefono';
         END
         IF @has_codtng = 1 BEGIN
@@ -648,7 +674,7 @@ export class ConfiguracionesService {
           + N'OUTPUT inserted.codneg_neg AS codneg, inserted.nombre_neg AS nombre, '
           + N'       ' + CASE WHEN @has_codtng = 1 THEN N'inserted.codtng_neg' ELSE N'CAST(NULL AS int)' END + N' AS codtng, '
           + N'       ' + CASE WHEN @has_codcfn = 1 THEN N'inserted.codcfn_neg' ELSE N'CAST(NULL AS int)' END + N' AS codcfn, '
-          + N'       ' + CASE WHEN @has_telefono = 1 THEN N'inserted.telefono_neg' ELSE N'CAST(NULL AS nvarchar(30))' END + N' AS telefono, '
+          + N'       ' + CASE WHEN @has_telefono = 1 THEN N'inserted.telneg_neg' ELSE N'CAST(NULL AS nvarchar(30))' END + N' AS telefono, '
           + N'       inserted.estado_neg AS estado, '
           + N'       ' + CASE WHEN @has_direccion = 1 THEN N'inserted.direccion_neg' ELSE N'CAST(NULL AS nvarchar(250))' END + N' AS direccion, '
           + N'       ' + CASE WHEN @has_stockmin = 1 THEN N'inserted.stockmin_default_neg' ELSE N'CAST(NULL AS int)' END + N' AS stock_min_default '
@@ -678,7 +704,18 @@ export class ConfiguracionesService {
         },
       );
 
-      return rows?.[0] ?? null;
+      const creado = rows?.[0] ?? null;
+      // FK al catálogo de direcciones (si se seleccionó una).
+      if (creado?.codneg && dto.coddir !== undefined) {
+        await this.setNegocioDireccion(
+          Number(creado.codneg),
+          dto.coddir == null ? null : Number(dto.coddir),
+          audit,
+        );
+      }
+
+      await this.invalidarNegociosCache();
+      return creado;
     } catch (error) {
       throw new BadRequestException(this.formatError(error));
     }
@@ -697,6 +734,7 @@ export class ConfiguracionesService {
           WHERE codneg_neg = @codneg;`,
         { codneg },
       );
+      await this.invalidarNegociosCache();
       return rows?.[0] ?? null;
     } catch (error) {
       throw new BadRequestException(this.formatError(error));
@@ -716,6 +754,7 @@ export class ConfiguracionesService {
           WHERE codneg_neg = @codneg;`,
         { codneg },
       );
+      await this.invalidarNegociosCache();
       return rows?.[0] ?? null;
     } catch (error) {
       throw new BadRequestException(this.formatError(error));
@@ -729,6 +768,7 @@ export class ConfiguracionesService {
     codcfn?: number | null;
     telefono?: string | null;
     direccion?: string | null;
+    coddir?: number | null;
     stock_min_default?: number | null;
     estado?: 'A' | 'I';
     audit?: number | null;
@@ -775,7 +815,7 @@ export class ConfiguracionesService {
 
     try {
       const hasDireccion = await this.hasNegocioColumn('direccion_neg');
-      const hasTelefono = await this.hasNegocioColumn('telefono_neg');
+      const hasTelefono = await this.hasNegocioColumn('telneg_neg');
       const stockMin =
         stockMinRaw === undefined ? undefined : stockMinRaw === null ? null : Number(stockMinRaw);
       const codtng =
@@ -788,7 +828,7 @@ export class ConfiguracionesService {
         DECLARE @has_usermod bit = CASE WHEN COL_LENGTH('dbo.negocios', 'usermod') IS NULL THEN 0 ELSE 1 END;
         DECLARE @has_fechmod bit = CASE WHEN COL_LENGTH('dbo.negocios', 'fechmod') IS NULL THEN 0 ELSE 1 END;
         DECLARE @has_direccion bit = CASE WHEN COL_LENGTH('dbo.negocios', 'direccion_neg') IS NULL THEN 0 ELSE 1 END;
-        DECLARE @has_telefono bit = CASE WHEN COL_LENGTH('dbo.negocios', 'telefono_neg') IS NULL THEN 0 ELSE 1 END;
+        DECLARE @has_telefono bit = CASE WHEN COL_LENGTH('dbo.negocios', 'telneg_neg') IS NULL THEN 0 ELSE 1 END;
         DECLARE @has_codtng bit = CASE WHEN COL_LENGTH('dbo.negocios', 'codtng_neg') IS NULL THEN 0 ELSE 1 END;
         DECLARE @has_codcfn bit = CASE WHEN COL_LENGTH('dbo.negocios', 'codcfn_neg') IS NULL THEN 0 ELSE 1 END;
         DECLARE @has_stockmin bit = CASE WHEN COL_LENGTH('dbo.negocios', 'stockmin_default_neg') IS NULL THEN 0 ELSE 1 END;
@@ -801,7 +841,7 @@ export class ConfiguracionesService {
           SET @set = @set + CASE WHEN LEN(@set) = 0 THEN N'' ELSE N', ' END + N'direccion_neg = @direccion';
         END
         IF @has_telefono = 1 AND @has_telefono_input = 1 BEGIN
-          SET @set = @set + CASE WHEN LEN(@set) = 0 THEN N'' ELSE N', ' END + N'telefono_neg = @telefono';
+          SET @set = @set + CASE WHEN LEN(@set) = 0 THEN N'' ELSE N', ' END + N'telneg_neg = @telefono';
         END
         IF @has_codtng = 1 AND @has_codtng_input = 1 BEGIN
           SET @set = @set + CASE WHEN LEN(@set) = 0 THEN N'' ELSE N', ' END + N'codtng_neg = @codtng';
@@ -830,7 +870,7 @@ export class ConfiguracionesService {
           + N'OUTPUT inserted.codneg_neg AS codneg, inserted.nombre_neg AS nombre, '
           + N'       ' + CASE WHEN @has_codtng = 1 THEN N'inserted.codtng_neg' ELSE N'CAST(NULL AS int)' END + N' AS codtng, '
           + N'       ' + CASE WHEN @has_codcfn = 1 THEN N'inserted.codcfn_neg' ELSE N'CAST(NULL AS int)' END + N' AS codcfn, '
-          + N'       ' + CASE WHEN @has_telefono = 1 THEN N'inserted.telefono_neg' ELSE N'CAST(NULL AS nvarchar(30))' END + N' AS telefono, '
+          + N'       ' + CASE WHEN @has_telefono = 1 THEN N'inserted.telneg_neg' ELSE N'CAST(NULL AS nvarchar(30))' END + N' AS telefono, '
           + N'       inserted.estado_neg AS estado, '
           + N'       ' + CASE WHEN @has_direccion = 1 THEN N'inserted.direccion_neg' ELSE N'CAST(NULL AS nvarchar(250))' END + N' AS direccion, '
           + N'       ' + CASE WHEN @has_stockmin = 1 THEN N'inserted.stockmin_default_neg' ELSE N'CAST(NULL AS int)' END + N' AS stock_min_default '
@@ -873,6 +913,16 @@ export class ConfiguracionesService {
         },
       );
 
+      // FK al catálogo de direcciones (si vino en el payload).
+      if (dto.coddir !== undefined) {
+        await this.setNegocioDireccion(
+          codneg,
+          dto.coddir == null ? null : Number(dto.coddir),
+          audit,
+        );
+      }
+
+      await this.invalidarNegociosCache();
       return rows?.[0] ?? null;
     } catch (error) {
       throw new BadRequestException(this.formatError(error));

@@ -359,6 +359,92 @@ export class InventarioAvanzadoController {
   }
 
   // ═══════════════════════════════════════════════════════════════════
+  // EMPAQUE: configuración de jerarquía (caja→paquete→unidad)
+  // ═══════════════════════════════════════════════════════════════════
+
+  @Post('empaques/propagar-precios')
+  @RequirePermiso('PRODUCTOS.EDITAR')
+  async propagarPreciosEmpaque(
+    @Body() body: { codneg: number },
+    @Request() req: any,
+  ) {
+    const codnegValue = Number(body.codneg);
+    await this.authService.assertCanAccessNegocio(req.user, codnegValue);
+    return await this.service.propagarPreciosEmpaque(codnegValue);
+  }
+
+  @Get('empaques/jerarquia')
+  @RequirePermiso('INVENTARIO.VER')
+  async listarJerarquiaEmpaques(@Query('codneg') codneg: number, @Request() req: any) {
+    const codnegValue = Number(codneg);
+    await this.authService.assertCanAccessNegocio(req.user, codnegValue);
+    return await this.service.listarJerarquiaEmpaques(codnegValue);
+  }
+
+  @Get('empaques/:codprd')
+  @RequirePermiso('PRODUCTOS.VER')
+  async getEmpaqueConfig(
+    @Param('codprd') codprd: string,
+    @Query('codneg') codneg: number,
+    @Request() req: any,
+  ) {
+    const codnegValue = Number(codneg);
+    await this.authService.assertCanAccessNegocio(req.user, codnegValue);
+    return await this.service.getEmpaqueConfig(codnegValue, Number(codprd));
+  }
+
+  @Post('empaques')
+  @RequirePermiso('PRODUCTOS.RECETAS.GESTIONAR')
+  async setEmpaqueConfig(
+    @Body() body: { codneg: number; codprd_empaque: number; codprd_contenido: number; cantidad: number },
+    @Request() req: any,
+  ) {
+    const codnegValue = Number(body.codneg);
+    await this.authService.assertCanAccessNegocio(req.user, codnegValue);
+    return await this.service.setEmpaqueConfig({
+      codneg: codnegValue,
+      codprd_empaque: Number(body.codprd_empaque),
+      codprd_contenido: Number(body.codprd_contenido),
+      cantidad: Number(body.cantidad),
+      usercrea: req.user?.audit ?? null,
+    });
+  }
+
+  @Post('empaques/destapar')
+  @RequirePermiso('INVENTARIO.MOVIMIENTO.CREAR')
+  async destaparEmpaque(
+    @Body() body: { codneg: number; codprd_empaque: number; cantidad: number },
+    @Request() req: any,
+  ) {
+    const codnegValue = Number(body.codneg);
+    await this.authService.assertCanAccessNegocio(req.user, codnegValue);
+    return await this.service.destaparEmpaque({
+      codneg: codnegValue,
+      codprd_empaque: Number(body.codprd_empaque),
+      cantidad: Number(body.cantidad),
+      codusr: req.user?.codusr ?? null,
+      usercrea: req.user?.audit ?? null,
+    });
+  }
+
+  @Post('empaques/ensamblar')
+  @RequirePermiso('INVENTARIO.MOVIMIENTO.CREAR')
+  async ensamblarCompuesto(
+    @Body() body: { codneg: number; codprd_final: number; cantidad: number },
+    @Request() req: any,
+  ) {
+    const codnegValue = Number(body.codneg);
+    await this.authService.assertCanAccessNegocio(req.user, codnegValue);
+    return await this.service.ensamblarCompuesto({
+      codneg: codnegValue,
+      codprd_final: Number(body.codprd_final),
+      cantidad: Number(body.cantidad),
+      codusr: req.user?.codusr ?? null,
+      usercrea: req.user?.audit ?? null,
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
   // VISTA CONSOLIDADA: Productos con stock, precio y unidad
   // ═══════════════════════════════════════════════════════════════════
 

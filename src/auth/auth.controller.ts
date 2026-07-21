@@ -99,10 +99,14 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   @Post('switch-negocio')
   async switchNegocio(
-    @Body() body: { codneg: number },
+    @Body() body: { codneg: number | null },
     @Request() req: RequestUser,
   ) {
-    return await this.service.switchNegocio(req.user, Number(body.codneg));
+    // codneg null = volver a la vista general (sesión sin negocio).
+    return await this.service.switchNegocio(
+      req.user,
+      body.codneg == null ? null : Number(body.codneg),
+    );
   }
 
   /**

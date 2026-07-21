@@ -1,4 +1,4 @@
-import { Body, Controller, Post, Request, UseGuards } from '@nestjs/common';
+import { Body, Controller, Post, Request, UseGuards, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
 import type { RequestUser } from 'src/auth/auth.types';
 import { AuthService } from 'src/auth/auth.service';
@@ -46,5 +46,27 @@ export class AuthzController {
     }
 
     return { ok: true, codneg, permisos: result };
+  }
+
+  @Post('authorize')
+  async authorize(
+    @Body() body: { codusr: string; password: string; permiso: string; codneg?: number },
+    @Request() req: RequestUser,
+  ) {
+    const codusr = String(body?.codusr ?? '').trim();
+    const password = String(body?.password ?? '').trim();
+    const permiso = String(body?.permiso ?? '').trim();
+    if (!codusr || !password || !permiso) throw new BadRequestException('codusr, password y permiso son requeridos');
+
+    try {
+      const loginRes = await this.authService.login({ codusr, password, codneg: body?.codneg });
+      const auditId = loginRes?.user?.codper ?? null;
+      const codneg = body?.codneg ?? req.user?.codneg ?? null;
+      const ok = await this.authz.tienePermiso(codusr, codneg, permiso);
+      if (!ok) throw new ForbiddenException('No autorizado');
+      return { ok: true, codusr, auditId };
+    } catch (e) {
+      throw new ForbiddenException('Credenciales inválidas o sin permiso');
+    }
   }
 }

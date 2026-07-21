@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Post,
+  Param,
   Query,
   Request,
   UseGuards,
@@ -22,21 +23,10 @@ export class RbacController {
     return await this.service.catalog();
   }
 
-  // Alias: GET /rbac/permisos — devuelve lista plana de permisos del catálogo
+  // GET /rbac/permisos — lista plana de permisos REALES de la BD (con su módulo)
   @Get('permisos')
   async permisos() {
-    const cat = await this.service.catalog();
-    // Retorna array plano de permisos con su módulo
-    return (cat as any)?.moduloPermisos
-      ? Object.entries((cat as any).moduloPermisos).flatMap(([mod, perms]: [string, any]) =>
-          (perms as string[]).map((clave: string, i: number) => ({
-            codprm: i + 1,
-            clave,
-            nombre: clave,
-            modulo: mod,
-          })),
-        )
-      : [];
+    return await this.service.listarPermisos();
   }
 
   // Módulos visibles según negocio + permisos
@@ -49,6 +39,27 @@ export class RbacController {
   }
 
   // --- Administración RBAC (solo SUPERADMIN) ---
+
+  @Get('roles')
+  async roles(@Request() req: RequestUser) {
+    return await this.service.listarRoles(req.user);
+  }
+
+  @Post('roles')
+  async rolCrear(
+    @Body() body: { nombre: string; detalle?: string | null; codnegs?: number[] },
+    @Request() req: RequestUser,
+  ) {
+    return await this.service.rolCrear(req.user, body);
+  }
+
+  @Get('roles/:codrol/permisos')
+  async rolPermisos(
+    @Param('codrol') codrol: string,
+    @Request() req: RequestUser,
+  ) {
+    return await this.service.rolPermisos(req.user, Number(codrol));
+  }
 
   @Post('permisos/upsert')
   async permisoUpsert(

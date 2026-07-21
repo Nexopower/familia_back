@@ -16,6 +16,13 @@ export type PermisoClave =
   | 'FACTURAS.VER'
   | 'FACTURAS.CREAR'
   | 'FACTURAS.CERRAR'
+  | 'FACTURAS.FIAR'
+  | 'AUDITORIA.VER'
+  | 'FACTURAS.FONDO'
+  | 'FONDOS.VER'
+  | 'FONDOS.CONFIGURAR'
+  | 'FONDOS.ADELANTAR'
+  | 'FONDOS.TRANSFERIR'
   | 'RESERVAS.VER'
   | 'RESERVAS.CREAR'
   | 'RESERVAS.REPROGRAMAR'
@@ -38,7 +45,9 @@ export type ModuloKey =
   | 'RESERVAS'
   | 'CONTABILIDAD'
   | 'USUARIOS'
-  | 'CONFIGURACIONES';
+  | 'CONFIGURACIONES'
+  | 'AUDITORIA'
+  | 'FONDOS';
 
 export const MODULOS: Array<{ key: ModuloKey; nombre: string }> = [
   { key: 'DASHBOARD', nombre: 'Dashboard' },
@@ -49,6 +58,8 @@ export const MODULOS: Array<{ key: ModuloKey; nombre: string }> = [
   { key: 'CONTABILIDAD', nombre: 'Contabilidad' },
   { key: 'USUARIOS', nombre: 'Usuarios' },
   { key: 'CONFIGURACIONES', nombre: 'Configuraciones' },
+  { key: 'AUDITORIA', nombre: 'Auditoria' },
+  { key: 'FONDOS', nombre: 'Fondos diarios' },
 ];
 
 export const MODULO_PERMISOS: Record<ModuloKey, PermisoClave[]> = {
@@ -72,7 +83,7 @@ export const MODULO_PERMISOS: Record<ModuloKey, PermisoClave[]> = {
     'INVENTARIO.CONVERSIONES.GESTIONAR',
     'INVENTARIO.TRANSFORMACIONES.GESTIONAR',
   ],
-  FACTURAS: ['FACTURAS.VER', 'FACTURAS.CREAR', 'FACTURAS.CERRAR'],
+  FACTURAS: ['FACTURAS.VER', 'FACTURAS.CREAR', 'FACTURAS.CERRAR', 'FACTURAS.FIAR', 'FACTURAS.FONDO'],
   RESERVAS: ['RESERVAS.VER', 'RESERVAS.CREAR', 'RESERVAS.REPROGRAMAR'],
   CONTABILIDAD: [
     'CONTABILIDAD.VER',
@@ -87,6 +98,8 @@ export const MODULO_PERMISOS: Record<ModuloKey, PermisoClave[]> = {
     'USUARIOS.ROLES_CREABLES.CONFIGURAR',
   ],
   CONFIGURACIONES: ['CONFIGURACIONES.VER', 'CONFIGURACIONES.EDITAR'],
+  AUDITORIA: ['AUDITORIA.VER'],
+  FONDOS: ['FONDOS.VER', 'FONDOS.CONFIGURAR', 'FONDOS.ADELANTAR', 'FONDOS.TRANSFERIR'],
 };
 
 export const PERMISOS: Array<{
@@ -110,6 +123,13 @@ export const PERMISOS: Array<{
   { clave: 'FACTURAS.VER', modulo: 'FACTURAS', nombre: 'Ver facturas' },
   { clave: 'FACTURAS.CREAR', modulo: 'FACTURAS', nombre: 'Crear facturas' },
   { clave: 'FACTURAS.CERRAR', modulo: 'FACTURAS', nombre: 'Cerrar facturas' },
+  { clave: 'FACTURAS.FIAR', modulo: 'FACTURAS', nombre: 'Fiar ventas (credito)' },
+  { clave: 'AUDITORIA.VER', modulo: 'AUDITORIA', nombre: 'Ver bitacora de actividad' },
+  { clave: 'FACTURAS.FONDO', modulo: 'FACTURAS', nombre: 'Aplicar fondo al facturar' },
+  { clave: 'FONDOS.VER', modulo: 'FONDOS', nombre: 'Ver fondos diarios' },
+  { clave: 'FONDOS.CONFIGURAR', modulo: 'FONDOS', nombre: 'Configurar fondos de clientes' },
+  { clave: 'FONDOS.ADELANTAR', modulo: 'FONDOS', nombre: 'Autorizar adelantos de fondo' },
+  { clave: 'FONDOS.TRANSFERIR', modulo: 'FONDOS', nombre: 'Transferir fondos entre negocios' },
 
   { clave: 'RESERVAS.VER', modulo: 'RESERVAS', nombre: 'Ver reservas' },
   { clave: 'RESERVAS.CREAR', modulo: 'RESERVAS', nombre: 'Crear reservas' },

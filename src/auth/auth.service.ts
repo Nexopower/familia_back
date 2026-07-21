@@ -1,8 +1,11 @@
 import {
   BadRequestException,
+  Inject,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
 import { TokenService } from 'src/token/token.service';
 import { SqlService } from 'src/sql/sql.service';
 import { EncryptionService } from 'src/encryption/encryption.service';
@@ -14,6 +17,7 @@ export class AuthService {
     private readonly token: TokenService,
     private readonly sql: SqlService,
     private readonly encryption: EncryptionService,
+    @Inject(CACHE_MANAGER) private readonly cache: Cache,
   ) {}
 
   private async getEncryptedPassword(password: string): Promise<string> {
@@ -140,11 +144,17 @@ export class AuthService {
   }
 
   async listNegociosForLogin() {
+    // Endpoint público del login: se pide en cada carga de la pantalla.
+    const cacheado = await this.cache.get('cat:negocios-login');
+    if (cacheado) return cacheado;
+
     const rows = await this.listAllNegocios();
-    return (rows || []).map((n: any) => ({
+    const negocios = (rows || []).map((n: any) => ({
       codneg: Number(n.codneg),
       nombre: String(n.nombre_neg ?? ''),
     }));
+    await this.cache.set('cat:negocios-login', negocios, 5 * 60 * 1000);
+    return negocios;
   }
 
   async listNegociosForUserContext(payload: { sub?: string } | undefined) {
@@ -211,6 +221,7 @@ export class AuthService {
 
     // 1) Identificar usuario
     let userRows: any[] = [];
+    let identificadorEsNombre = false;
 
     if (input.codusr) {
       userRows = await this.sql.executeQueryParams(
@@ -221,6 +232,27 @@ export class AuthService {
                 `,
         { codusr: input.codusr },
       );
+
+      // Fallback: el código ahora es autogenerado (LLLNNNNN) y el usuario
+      // normalmente inicia sesión con su NOMBRE de login. Si el identificador
+      // no coincide con ningún código, se intenta como nombre_usr.
+      if (!userRows || userRows.length === 0) {
+        userRows = await this.sql.executeQueryParams(
+          `
+                      SELECT codusr_usr, codper_usr, codrol_usr, nombre_usr, passwo_usr, estado_usr, esdueno_usr, loginmulti_usr
+                      FROM dbo.usuario
+                      WHERE nombre_usr = @nombre
+                        AND estado_usr = 'A'
+                        AND (passwo_usr = @passEnc OR passwo_usr = @passPlain);
+                  `,
+          {
+            nombre: input.codusr,
+            passEnc: encryptedPassword,
+            passPlain: password,
+          },
+        );
+        identificadorEsNombre = true;
+      }
     } else if (input.nombre) {
       // Buscar por nombre + password (hash determinístico). También permitimos password en texto plano
       // para compatibilidad con semillas (ej: admin) si todavía no está cifrado.
@@ -246,8 +278,12 @@ export class AuthService {
       throw new UnauthorizedException('Usuario o contraseña incorrectos');
     }
 
-    // Si viene nombre y devolvió varios (nombre no único), exigir codneg o codusr para desambiguar.
-    if (!input.codusr && input.nombre && userRows.length > 1 && !codneg) {
+    // Si el identificador fue un nombre (no único), exigir codneg o codusr para desambiguar.
+    if (
+      ((!input.codusr && input.nombre) || identificadorEsNombre) &&
+      userRows.length > 1 &&
+      !codneg
+    ) {
       throw new UnauthorizedException(
         'Debe seleccionar un negocio (codneg) o iniciar con codusr',
       );
@@ -383,11 +419,10 @@ export class AuthService {
       audit?: number | null;
       codneg?: number | null;
     },
-    codneg: number,
+    codneg: number | null,
   ) {
     const codusr = String(payload?.sub);
-    const targetCodneg = Number(codneg);
-    if (!codusr || !Number.isFinite(targetCodneg)) {
+    if (!codusr) {
       throw new UnauthorizedException('Negocio inválido');
     }
 
@@ -401,6 +436,26 @@ export class AuthService {
         );
       }
     }
+
+    // Deseleccionar negocio: sesión general (solo admin/dueño/multi-negocio).
+    if (codneg === null) {
+      const accessToken = await this.token.GenerateToken(
+        {
+          codusr,
+          codrol: undefined,
+          codneg: undefined,
+          auditId: this.toAuditIdSafe(payload.audit),
+        },
+        900,
+      );
+      return { accessToken, expiresIn: 900, codneg: null, codrol: null };
+    }
+
+    const targetCodneg = Number(codneg);
+    if (!Number.isFinite(targetCodneg)) {
+      throw new UnauthorizedException('Negocio inválido');
+    }
+
     const ok = esSuperAdmin
       ? true
       : await this.userHasNegocio(codusr, targetCodneg);

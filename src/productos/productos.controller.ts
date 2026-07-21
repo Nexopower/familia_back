@@ -32,6 +32,18 @@ export class ProductosController {
     return await this.service.listar(codnegValue);
   }
 
+  @Get('buscar')
+  @RequirePermiso('PRODUCTOS.VER')
+  async buscar(
+    @Query('codneg') codneg: number,
+    @Query('q') q: string,
+    @Request() req: any,
+  ) {
+    const codnegValue = codneg !== undefined && codneg !== null ? Number(codneg) : Number(req.user?.codneg ?? 0);
+    await this.authService.assertCanAccessNegocio(req.user, codnegValue);
+    return await this.service.buscar(codnegValue, String(q ?? '').trim());
+  }
+
   @Post()
   @RequirePermiso('PRODUCTOS.CREAR')
   async crear(
@@ -42,6 +54,8 @@ export class ProductosController {
       codigo?: string;
       codcat?: number;
       codmar?: number;
+      stockmin?: number | null;
+      tipo_prd?: 'simple' | 'compuesto' | 'empaque';
     },
     @Request() req: any,
   ) {
@@ -55,6 +69,8 @@ export class ProductosController {
       codigo: body.codigo,
       codcat: body.codcat ? Number(body.codcat) : undefined,
       codmar: body.codmar ? Number(body.codmar) : undefined,
+      stockmin: body.stockmin !== undefined ? (body.stockmin === null ? null : Number(body.stockmin)) : undefined,
+      tipo_prd: body.tipo_prd,
       usercrea: req.user?.audit ?? null,
     });
   }
@@ -71,6 +87,7 @@ export class ProductosController {
       codcat?: number | null;
       codmar?: number | null;
       stockmin?: number | null;
+      tipo_prd?: 'simple' | 'compuesto' | 'empaque';
       estado?: 'A' | 'I';
     },
     @Request() req: any,
@@ -86,6 +103,7 @@ export class ProductosController {
       codcat: body.codcat as any,
       codmar: body.codmar as any,
       stockmin: body.stockmin as any,
+      tipo_prd: body.tipo_prd,
       estado: body.estado,
       usermod: req.user?.audit ?? null,
     });
@@ -104,6 +122,30 @@ export class ProductosController {
       codneg: codnegValue,
       codprd: Number(codprd),
       usermod: req.user?.audit ?? null,
+    });
+  }
+
+  // --- Unidades de medida ---
+
+  @Get('unidades-medida')
+  @RequirePermiso('PRODUCTOS.VER')
+  async unidadesMedida(@Request() req: any) {
+    return await this.service.listarUnidadesMedida();
+  }
+
+  @Post('producto-um')
+  @RequirePermiso('PRODUCTOS.EDITAR')
+  async setProductoUm(
+    @Body() body: { codneg: number; codprd: number; codumd: number | null },
+    @Request() req: any,
+  ) {
+    const codnegValue = Number(body.codneg);
+    await this.authService.assertCanAccessNegocio(req.user, codnegValue);
+    return await this.service.setProductoUm({
+      codneg: codnegValue,
+      codprd: Number(body.codprd),
+      codumd: body.codumd === null ? null : Number(body.codumd),
+      usercrea: req.user?.audit ?? null,
     });
   }
 

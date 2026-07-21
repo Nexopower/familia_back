@@ -1,28 +1,128 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Inject, Injectable, BadRequestException } from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
 import { SqlService } from 'src/sql/sql.service';
+
+/** TTL de catálogos casi estáticos (categorías/marcas). */
+const CATALOGO_TTL_MS = 10 * 60 * 1000;
 
 @Injectable()
 export class ProductosService {
-  constructor(private readonly sql: SqlService) {}
+  constructor(
+    private readonly sql: SqlService,
+    @Inject(CACHE_MANAGER) private readonly cache: Cache,
+  ) {}
+
+  private catKey(tipo: 'categorias' | 'marcas', codneg: number) {
+    return `cat:${tipo}:${codneg}`;
+  }
 
   async listar(codneg: number) {
     if (!codneg) throw new BadRequestException('codneg es requerido');
     const query = `
       SELECT
-        codprd_prd AS codprd,
-        codneg_prd AS codneg,
-        nombre_prd AS nombre,
-        codigo_prd AS codigo,
-        codcat_prd AS codcat,
-        codmar_prd AS codmar,
-        stockmin_prd AS stockmin,
-        estado_prd AS estado,
-        fechcrea,
-        fechmod
-      FROM dbo.producto
-      WHERE codneg_prd = @codneg;
+        p.codprd_prd AS codprd,
+        p.codneg_prd AS codneg,
+        p.nombre_prd AS nombre,
+        p.codigo_prd AS codigo,
+        p.codcat_prd AS codcat,
+        p.codmar_prd AS codmar,
+        p.stockmin_prd AS stockmin,
+        p.tipo_prd AS tipo_prd,
+        pd.precio_pdt AS precio,
+        pd.precio_compra_pdt AS precio_compra,
+        p.estado_prd AS estado,
+        (SELECT COUNT(*) FROM dbo.producto_composicion pc
+         WHERE pc.codneg_pco = p.codneg_prd AND pc.codprd_final_pco = p.codprd_prd AND pc.estado_pco = 'A') AS num_insumos,
+        p.fechcrea,
+        p.fechmod,
+        CASE WHEN EXISTS (
+          SELECT 1 FROM dbo.producto_empaque pe2
+          WHERE pe2.codneg_pem = p.codneg_prd AND pe2.codprd_contenido_pem = p.codprd_prd
+        ) THEN 1 ELSE 0 END AS es_contenido_empaque,
+        pu.codumd_pum AS codumd,
+        um.nombre_umd AS nombre_umd,
+        um.simbolo_umd AS simbolo_umd,
+        um.tipo_umd AS tipo_umd,
+        (
+          SELECT TOP 1 pd_emp.precio_compra_pdt / pe_p.cantidad_pem
+          FROM dbo.producto_empaque pe_p
+          INNER JOIN dbo.producto_det pd_emp ON pd_emp.codprd_pdt = pe_p.codprd_pem
+          WHERE pe_p.codneg_pem = p.codneg_prd
+            AND pe_p.codprd_contenido_pem = p.codprd_prd
+            AND pe_p.estado_pem = 'A'
+            AND pd_emp.precio_compra_pdt > 0
+            AND pe_p.cantidad_pem > 0
+          ORDER BY pd_emp.precio_compra_pdt / pe_p.cantidad_pem ASC
+        ) AS costo_por_empaque
+      FROM dbo.producto p
+      OUTER APPLY (
+        SELECT TOP 1 precio_pdt, precio_compra_pdt
+        FROM dbo.producto_det pd
+        WHERE pd.codprd_pdt = p.codprd_prd
+        ORDER BY pd.codpdt_pdt DESC
+      ) pd
+      LEFT JOIN dbo.producto_um pu ON pu.codneg_pum = p.codneg_prd AND pu.codprd_pum = p.codprd_prd
+      LEFT JOIN dbo.unidades_medida um ON um.codumd_umd = pu.codumd_pum
+      WHERE p.codneg_prd = @codneg;
     `;
     return await this.sql.executeQueryParams(query, { codneg });
+  }
+
+  async buscar(codneg: number, q: string) {
+    if (!codneg) throw new BadRequestException('codneg es requerido');
+    const qParam = `%${String(q ?? '').trim()}%`;
+    const query = `
+      SELECT TOP 20
+        p.codprd_prd AS codprd,
+        p.codneg_prd AS codneg,
+        p.nombre_prd AS nombre,
+        p.codigo_prd AS codigo,
+        p.codcat_prd AS codcat,
+        p.codmar_prd AS codmar,
+        p.tipo_prd AS tipo_prd,
+        pd.precio_pdt AS precio,
+        pd.precio_compra_pdt AS precio_compra,
+        CASE WHEN EXISTS (
+          SELECT 1 FROM dbo.producto_empaque pe2
+          WHERE pe2.codneg_pem = p.codneg_prd AND pe2.codprd_contenido_pem = p.codprd_prd
+        ) THEN 1 ELSE 0 END AS es_contenido_empaque,
+        pu.codumd_pum AS codumd,
+        um.nombre_umd AS nombre_umd,
+        um.simbolo_umd AS simbolo_umd,
+        um.tipo_umd AS tipo_umd,
+        (
+          SELECT TOP 1 pd_emp.precio_compra_pdt / pe_p.cantidad_pem
+          FROM dbo.producto_empaque pe_p
+          INNER JOIN dbo.producto_det pd_emp ON pd_emp.codprd_pdt = pe_p.codprd_pem
+          WHERE pe_p.codneg_pem = p.codneg_prd
+            AND pe_p.codprd_contenido_pem = p.codprd_prd
+            AND pe_p.estado_pem = 'A'
+            AND pd_emp.precio_compra_pdt > 0
+            AND pe_p.cantidad_pem > 0
+          ORDER BY pd_emp.precio_compra_pdt / pe_p.cantidad_pem ASC
+        ) AS costo_por_empaque
+      FROM dbo.producto p
+      OUTER APPLY (
+        SELECT TOP 1 precio_pdt, precio_compra_pdt
+        FROM dbo.producto_det pd
+        WHERE pd.codprd_pdt = p.codprd_prd
+        ORDER BY pd.codpdt_pdt DESC
+      ) pd
+      LEFT JOIN dbo.producto_um pu ON pu.codneg_pum = p.codneg_prd AND pu.codprd_pum = p.codprd_prd
+      LEFT JOIN dbo.unidades_medida um ON um.codumd_umd = pu.codumd_pum
+      WHERE p.codneg_prd = @codneg
+        AND p.estado_prd = 'A'
+        AND (
+          p.nombre_prd LIKE @q
+          OR p.codigo_prd LIKE @q
+          OR CONVERT(VARCHAR(50), p.codcat_prd) LIKE @q
+          OR CONVERT(VARCHAR(50), p.codmar_prd) LIKE @q
+        )
+      ORDER BY p.nombre_prd;
+    `;
+
+    return await this.sql.executeQueryParams(query, { codneg, q: qParam });
   }
 
   async crear(dto: {
@@ -32,12 +132,16 @@ export class ProductosService {
     codcat?: number;
     codmar?: number;
     stockmin?: number | null;
+    tipo_prd?: 'simple' | 'compuesto' | 'empaque';
     usercrea?: number;
   }) {
     if (!dto.codneg || !dto.nombre)
       throw new BadRequestException('codneg y nombre son requeridos');
+    const tipo_prd = dto.tipo_prd && ['simple', 'compuesto', 'empaque'].includes(dto.tipo_prd)
+      ? dto.tipo_prd
+      : 'simple';
     const query = `
-            INSERT INTO producto (nombre_prd, codigo_prd, codcat_prd, codmar_prd, stockmin_prd, codneg_prd, usercrea)
+            INSERT INTO producto (nombre_prd, codigo_prd, codcat_prd, codmar_prd, stockmin_prd, tipo_prd, codneg_prd, usercrea)
             OUTPUT
               inserted.codprd_prd AS codprd,
               inserted.codneg_prd AS codneg,
@@ -46,10 +150,11 @@ export class ProductosService {
               inserted.codcat_prd AS codcat,
               inserted.codmar_prd AS codmar,
               inserted.stockmin_prd AS stockmin,
+              inserted.tipo_prd AS tipo_prd,
               inserted.estado_prd AS estado,
               inserted.fechcrea,
               inserted.fechmod
-            VALUES (@nombre, @codigo, @codcat, @codmar, @stockmin, @codneg, @usercrea)
+            VALUES (@nombre, @codigo, @codcat, @codmar, @stockmin, @tipo_prd, @codneg, @usercrea)
         `;
 
     const rows = await this.sql.executeQueryParams(query, {
@@ -58,6 +163,7 @@ export class ProductosService {
       codcat: dto.codcat ?? null,
       codmar: dto.codmar ?? null,
       stockmin: dto.stockmin === undefined ? null : dto.stockmin,
+      tipo_prd,
       codneg: dto.codneg,
       usercrea: dto.usercrea ?? null,
     });
@@ -72,6 +178,7 @@ export class ProductosService {
     codcat?: number | null;
     codmar?: number | null;
     stockmin?: number | null;
+    tipo_prd?: 'simple' | 'compuesto' | 'empaque';
     estado?: 'A' | 'I';
     usermod?: number;
   }) {
@@ -130,12 +237,18 @@ export class ProductosService {
         if (!Number.isFinite(stockmin) || stockmin < 0) {
           throw new BadRequestException('stockmin inválido');
         }
-        if (!Number.isInteger(stockmin)) {
-          throw new BadRequestException('stockmin debe ser entero');
+        if (stockmin < 0) {
+          throw new BadRequestException('stockmin no puede ser negativo');
         }
       }
       set.push('stockmin_prd = @stockmin');
       params.stockmin = stockmin;
+    }
+
+    if (dto.tipo_prd !== undefined) {
+      const tipo_prd = ['simple', 'compuesto', 'empaque'].includes(dto.tipo_prd) ? dto.tipo_prd : 'simple';
+      set.push('tipo_prd = @tipo_prd');
+      params.tipo_prd = tipo_prd;
     }
 
     if (dto.estado !== undefined) {
@@ -161,6 +274,7 @@ export class ProductosService {
         inserted.codcat_prd AS codcat,
         inserted.codmar_prd AS codmar,
         inserted.stockmin_prd AS stockmin,
+        inserted.tipo_prd AS tipo_prd,
         inserted.estado_prd AS estado,
         inserted.fechcrea,
         inserted.fechmod
@@ -208,7 +322,11 @@ export class ProductosService {
 
   async listarCategorias(codneg: number) {
     if (!codneg) throw new BadRequestException('codneg es requerido');
-    return await this.sql.executeQueryParams(
+    const key = this.catKey('categorias', codneg);
+    const cacheado = await this.cache.get(key);
+    if (cacheado) return cacheado;
+
+    const rows = await this.sql.executeQueryParams(
       `
         SELECT
           codcat_cat AS codcat,
@@ -224,6 +342,8 @@ export class ProductosService {
       `,
       { codneg },
     );
+    await this.cache.set(key, rows, CATALOGO_TTL_MS);
+    return rows;
   }
 
   async crearCategoria(dto: { codneg: number; nombre: string; usercrea?: number }) {
@@ -246,6 +366,7 @@ export class ProductosService {
       `,
       { nombre, codneg, usercrea: dto.usercrea ?? null },
     );
+    await this.cache.del(this.catKey('categorias', codneg));
     return rows?.[0] ?? null;
   }
 
@@ -296,6 +417,7 @@ export class ProductosService {
       params,
     );
 
+    await this.cache.del(this.catKey('categorias', codneg));
     return rows?.[0] ?? null;
   }
 
@@ -323,12 +445,17 @@ export class ProductosService {
       { codneg, codcat, usermod: dto.usermod ?? null },
     );
 
+    await this.cache.del(this.catKey('categorias', codneg));
     return rows?.[0] ?? null;
   }
 
   async listarMarcas(codneg: number) {
     if (!codneg) throw new BadRequestException('codneg es requerido');
-    return await this.sql.executeQueryParams(
+    const key = this.catKey('marcas', codneg);
+    const cacheado = await this.cache.get(key);
+    if (cacheado) return cacheado;
+
+    const rows = await this.sql.executeQueryParams(
       `
         SELECT
           codmar_mar AS codmar,
@@ -344,6 +471,8 @@ export class ProductosService {
       `,
       { codneg },
     );
+    await this.cache.set(key, rows, CATALOGO_TTL_MS);
+    return rows;
   }
 
   async crearMarca(dto: { codneg: number; nombre: string; usercrea?: number }) {
@@ -366,6 +495,7 @@ export class ProductosService {
       `,
       { nombre, codneg, usercrea: dto.usercrea ?? null },
     );
+    await this.cache.del(this.catKey('marcas', codneg));
     return rows?.[0] ?? null;
   }
 
@@ -416,7 +546,47 @@ export class ProductosService {
       params,
     );
 
+    await this.cache.del(this.catKey('marcas', codneg));
     return rows?.[0] ?? null;
+  }
+
+  async listarUnidadesMedida() {
+    const cacheado = await this.cache.get('cat:unidades');
+    if (cacheado) return cacheado;
+    const rows = await this.sql.executeQueryParams(
+      `SELECT codumd_umd AS codumd, nombre_umd AS nombre, simbolo_umd AS simbolo, tipo_umd AS tipo
+       FROM dbo.unidades_medida WHERE estado_umd = 'A' ORDER BY nombre_umd;`,
+      {},
+    );
+    await this.cache.set('cat:unidades', rows, CATALOGO_TTL_MS);
+    return rows;
+  }
+
+  async setProductoUm(dto: { codneg: number; codprd: number; codumd: number | null; usercrea?: number }) {
+    const codneg = Number(dto.codneg);
+    const codprd = Number(dto.codprd);
+    if (!Number.isFinite(codneg) || !codneg) throw new BadRequestException('codneg es requerido');
+    if (!Number.isFinite(codprd) || !codprd) throw new BadRequestException('codprd es requerido');
+
+    if (dto.codumd === null || dto.codumd === undefined) {
+      await this.sql.executeQueryParams(
+        `DELETE FROM dbo.producto_um WHERE codneg_pum = @codneg AND codprd_pum = @codprd;`,
+        { codneg, codprd },
+      );
+      return { deleted: true };
+    }
+
+    const codumd = Number(dto.codumd);
+    await this.sql.executeQueryParams(
+      `IF EXISTS (SELECT 1 FROM dbo.producto_um WHERE codneg_pum = @codneg AND codprd_pum = @codprd)
+         UPDATE dbo.producto_um SET codumd_pum = @codumd, usermod = @usercrea, fechmod = GETDATE()
+         WHERE codneg_pum = @codneg AND codprd_pum = @codprd
+       ELSE
+         INSERT INTO dbo.producto_um (codneg_pum, codprd_pum, codumd_pum, factor_inventario_pum, usercrea)
+         VALUES (@codneg, @codprd, @codumd, 1, @usercrea);`,
+      { codneg, codprd, codumd, usercrea: dto.usercrea ?? null },
+    );
+    return { codumd };
   }
 
   async inactivarMarca(dto: { codneg: number; codmar: number; usermod?: number }) {
@@ -443,6 +613,7 @@ export class ProductosService {
       { codneg, codmar, usermod: dto.usermod ?? null },
     );
 
+    await this.cache.del(this.catKey('marcas', codneg));
     return rows?.[0] ?? null;
   }
 }

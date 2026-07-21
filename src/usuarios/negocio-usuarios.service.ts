@@ -43,77 +43,165 @@ export class NegocioUsuariosService {
     // Validar acceso al negocio (admin bypass)
     await this.authService.assertCanAccessNegocio(payload, codnegValue);
 
-    // SP recomendado (si existe en tu BD)
-    try {
+    const esSuperAdmin = await this.authService.isSuperAdmin(actor);
+
+    // Columnas comunes (nombres que espera el frontend).
+    const cols = `
+      u.codusr_usr       AS codusr,
+      u.nombre_usr       AS nombre_usr,
+      ISNULL(un.estado_uneg, 'A') AS estado,
+      u.estado_usr       AS estado_usr,
+      per.nombre_per     AS persona_nombre,
+      per.apellidos_per  AS persona_apellido,
+      r.nombre_rol       AS rol_nombre,
+      un.codrol_uneg     AS codrol,
+      u.esdueno_usr      AS esdueno,
+      u.loginmulti_usr   AS loginmulti,
+      CAST(CASE WHEN nd.codusr_ndu IS NULL THEN 0 ELSE 1 END AS bit) AS esdueno_negocio
+    `;
+
+    // SUPERADMIN / dueño con acceso: ve TODOS los usuarios del negocio,
+    // incluidos los dueños aunque no tengan vínculo en usuario_negocio.
+    if (esSuperAdmin) {
       return await this.sql.executeQueryParams(
-        `EXEC dbo.sp_usuario_descendientes_listar @actor_codusr=@actor_codusr, @codneg=@codneg;`,
-        { actor_codusr: actor, codneg: codnegValue },
-      );
-    } catch {
-      // Fallback: lista descendientes por jerarquía (codpad_usr) filtrando por negocio
-      const rows = await this.sql.executeQueryParams(
         `
-          WITH tree AS (
-            SELECT u.codusr_usr, u.codpad_usr, 0 AS nivel
-            FROM dbo.usuario u
-            WHERE u.codusr_usr = @actor
-
-            UNION ALL
-
-            SELECT u.codusr_usr, u.codpad_usr, t.nivel + 1
-            FROM dbo.usuario u
-            INNER JOIN tree t ON u.codpad_usr = t.codusr_usr
-          )
-          SELECT
-            u.codusr_usr AS codusr,
-            u.nombre_usr AS nombre,
-            u.estado_usr AS estado_usr,
-            u.codpad_usr AS codpad,
-            t.nivel AS nivel,
-            un.codrol_uneg AS codrol_negocio,
-            un.estado_uneg AS estado_uneg
-          FROM tree t
-          INNER JOIN dbo.usuario u ON u.codusr_usr = t.codusr_usr
+          SELECT ${cols}
+          FROM (
+            SELECT codusr_uneg AS codusr FROM dbo.usuario_negocio WHERE codneg_uneg = @codneg
+            UNION
+            SELECT codusr_ndu FROM dbo.negocio_dueno WHERE codneg_ndu = @codneg AND ISNULL(estado_ndu, 'A') = 'A'
+          ) m
+          INNER JOIN dbo.usuario u ON u.codusr_usr = m.codusr
           LEFT JOIN dbo.usuario_negocio un
-            ON un.codusr_uneg = u.codusr_usr
-           AND un.codneg_uneg = @codneg
-          WHERE t.nivel > 0
-          ORDER BY t.nivel, u.codusr_usr;
+            ON un.codusr_uneg = u.codusr_usr AND un.codneg_uneg = @codneg
+          LEFT JOIN dbo.negocio_dueno nd
+            ON nd.codusr_ndu = u.codusr_usr AND nd.codneg_ndu = @codneg AND ISNULL(nd.estado_ndu, 'A') = 'A'
+          LEFT JOIN dbo.personas per ON per.codper_per = u.codper_usr
+          LEFT JOIN dbo.roles r ON r.codrol_rol = un.codrol_uneg
+          ORDER BY u.codusr_usr;
         `,
-        { actor, codneg: codnegValue },
+        { codneg: codnegValue },
       );
-
-      return rows;
     }
+
+    // Resto: solo sus descendientes (jerarquía codpad_usr) dentro del negocio.
+    return await this.sql.executeQueryParams(
+      `
+        WITH tree AS (
+          SELECT u.codusr_usr FROM dbo.usuario u WHERE u.codusr_usr = @actor
+          UNION ALL
+          SELECT u.codusr_usr
+          FROM dbo.usuario u
+          INNER JOIN tree t ON u.codpad_usr = t.codusr_usr
+        )
+        SELECT ${cols}
+        FROM tree t
+        INNER JOIN dbo.usuario u ON u.codusr_usr = t.codusr_usr
+        INNER JOIN dbo.usuario_negocio un
+          ON un.codusr_uneg = u.codusr_usr AND un.codneg_uneg = @codneg
+        LEFT JOIN dbo.negocio_dueno nd
+          ON nd.codusr_ndu = u.codusr_usr AND nd.codneg_ndu = @codneg AND ISNULL(nd.estado_ndu, 'A') = 'A'
+        LEFT JOIN dbo.personas per ON per.codper_per = u.codper_usr
+        LEFT JOIN dbo.roles r ON r.codrol_rol = un.codrol_uneg
+        WHERE t.codusr_usr <> @actor
+        ORDER BY u.codusr_usr;
+      `,
+      { actor, codneg: codnegValue },
+    );
+  }
+
+  /**
+   * Busca usuarios existentes para asignarlos al negocio (aún no vinculados).
+   * SUPERADMIN busca en todos; el resto solo entre sus descendientes.
+   */
+  async buscarAsignables(
+    payload: JwtPayload | undefined,
+    codneg: number,
+    q: string,
+  ) {
+    const actor = this.actorCodusr(payload);
+    const codnegValue = Number(codneg);
+    if (!Number.isFinite(codnegValue) || !codnegValue) {
+      throw new BadRequestException('codneg es requerido');
+    }
+    const term = String(q ?? '').trim();
+    if (term.length < 2) {
+      throw new BadRequestException('q debe tener al menos 2 caracteres');
+    }
+
+    await this.authService.assertCanAccessNegocio(payload, codnegValue);
+    const esSuperAdmin = await this.authService.isSuperAdmin(actor);
+
+    // No superadmin: solo puede asignar usuarios de su propio árbol (descendientes).
+    const filtroDescendientes = esSuperAdmin
+      ? ''
+      : 'AND u.codusr_usr IN (SELECT codusr_usr FROM tree WHERE codusr_usr <> @actor)';
+
+    return await this.sql.executeQueryParams(
+      `
+        WITH tree AS (
+          SELECT u0.codusr_usr FROM dbo.usuario u0 WHERE u0.codusr_usr = @actor
+          UNION ALL
+          SELECT u1.codusr_usr
+          FROM dbo.usuario u1
+          INNER JOIN tree t ON u1.codpad_usr = t.codusr_usr
+        )
+        SELECT TOP 20
+          u.codusr_usr      AS codusr,
+          u.nombre_usr      AS nombre_usr,
+          per.nombre_per    AS persona_nombre,
+          per.apellidos_per AS persona_apellido
+        FROM dbo.usuario u
+        LEFT JOIN dbo.personas per ON per.codper_per = u.codper_usr
+        WHERE u.estado_usr = 'A'
+          AND NOT EXISTS (
+            SELECT 1 FROM dbo.usuario_negocio un
+            WHERE un.codusr_uneg = u.codusr_usr AND un.codneg_uneg = @codneg
+          )
+          ${filtroDescendientes}
+          AND (
+            u.codusr_usr LIKE @q
+            OR u.nombre_usr LIKE @q
+            OR ISNULL(per.nombre_per, '') LIKE @q
+            OR ISNULL(per.apellidos_per, '') LIKE @q
+          )
+        ORDER BY u.codusr_usr;
+      `,
+      { codneg: codnegValue, actor, q: `%${term}%` },
+    );
   }
 
   async crearConRol(
     payload: JwtPayload | undefined,
     codneg: number,
     input: {
-      codusr: string;
+      /** Opcional: si no viene, el código se genera automáticamente (LLLNNNNN). */
+      codusr?: string;
       nombre: string;
       password: string;
       codrol: number;
       codper?: number;
+      esdueno?: boolean;
+      loginmulti?: boolean;
+      /** Negocios adicionales a los que tendrá acceso (login multi-negocio). */
+      codnegs?: number[];
     },
   ) {
     const actor = this.actorCodusr(payload);
     const codnegValue = Number(codneg);
     const codrolValue = Number(input?.codrol);
+    const codrolFinal =
+      Number.isFinite(codrolValue) && codrolValue > 0 ? codrolValue : null;
 
     if (!Number.isFinite(codnegValue) || !codnegValue) {
       throw new BadRequestException('codneg es requerido');
     }
-    if (!Number.isFinite(codrolValue) || !codrolValue) {
-      throw new BadRequestException('codrol es requerido');
-    }
 
-    const codusrNuevo = String(input?.codusr ?? '').trim();
+    // El código de usuario ya NO se digita: lo genera el SP salvo que venga explícito.
+    const codusrNuevo = String(input?.codusr ?? '').trim() || null;
     const nombre = String(input?.nombre ?? '').trim();
     const password = String(input?.password ?? '');
 
-    if (!codusrNuevo) throw new BadRequestException('codusr es requerido');
     if (!nombre) throw new BadRequestException('nombre es requerido');
     if (!password) throw new BadRequestException('password es requerido');
 
@@ -130,8 +218,8 @@ export class NegocioUsuariosService {
       );
     }
 
-    // SP recomendado (si existe en tu BD). Debe aplicar plantilla y validar roles creables.
-    return await this.sql.executeQueryParams(
+    // SP recomendado (si existe en tu BD). Genera el código si @codusr_nuevo es NULL.
+    const rows = await this.sql.executeQueryParams(
       `
         EXEC dbo.sp_usuario_crear_con_rol
           @actor_codusr=@actor_codusr,
@@ -140,7 +228,9 @@ export class NegocioUsuariosService {
           @nombre=@nombre,
           @password_hash=@password_hash,
           @codper=@codper,
-          @codrol=@codrol;
+          @codrol=@codrol,
+          @esdueno=@esdueno,
+          @loginmulti=@loginmulti;
       `,
       {
         actor_codusr: actor,
@@ -149,26 +239,57 @@ export class NegocioUsuariosService {
         nombre,
         password_hash: passwordHash,
         codper: input?.codper ?? null,
-        codrol: codrolValue,
+        codrol: codrolFinal,
+        esdueno: input?.esdueno ? 1 : 0,
+        loginmulti: input?.loginmulti ? 1 : 0,
       },
     );
+
+    const creado = rows?.[0] ?? null;
+    const codusrCreado = String(creado?.codusr ?? '').trim();
+
+    // Vincular negocios adicionales (login multi-negocio) reutilizando el SP de rol.
+    const extras = Array.from(
+      new Set(
+        (input?.codnegs ?? [])
+          .map((n) => Number(n))
+          .filter((n) => Number.isFinite(n) && n > 0 && n !== codnegValue),
+      ),
+    );
+    if (codusrCreado && extras.length) {
+      for (const neg of extras) {
+        await this.authService.assertCanAccessNegocio(payload, neg);
+        await this.sql.executeQueryParams(
+          `EXEC dbo.sp_usuario_negocio_rol_set @actor_codusr=@actor_codusr, @codneg=@codneg, @codusr_objetivo=@codusr_objetivo, @codrol_nuevo=@codrol_nuevo;`,
+          {
+            actor_codusr: actor,
+            codneg: neg,
+            codusr_objetivo: codusrCreado,
+            codrol_nuevo: codrolFinal,
+          },
+        );
+      }
+    }
+
+    return creado;
   }
 
   async cambiarRolNegocio(
     payload: JwtPayload | undefined,
     codneg: number,
     codusrObjetivo: string,
-    codrolNuevo: number,
+    codrolNuevo: number | null,
   ) {
     const actor = this.actorCodusr(payload);
     const codnegValue = Number(codneg);
-    const codrolValue = Number(codrolNuevo);
+    // Rol opcional: NULL = vincular al negocio sin rol.
+    const codrolValue =
+      codrolNuevo == null || !Number.isFinite(Number(codrolNuevo)) || Number(codrolNuevo) <= 0
+        ? null
+        : Number(codrolNuevo);
 
     if (!Number.isFinite(codnegValue) || !codnegValue) {
       throw new BadRequestException('codneg es requerido');
-    }
-    if (!Number.isFinite(codrolValue) || !codrolValue) {
-      throw new BadRequestException('codrolNuevo es requerido');
     }
 
     const objetivo = String(codusrObjetivo ?? '').trim();
